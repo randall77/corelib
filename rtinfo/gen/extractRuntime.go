@@ -63,6 +63,7 @@ var structs = [...]string{
 	"_func",
 	"stackmap",
 	"_type",
+	"itab",
 }
 
 var constants = [...]string{

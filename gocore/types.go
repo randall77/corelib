@@ -7,13 +7,16 @@ import (
 	"github.com/randall77/corelib/rtinfo"
 )
 
-// Pseudo objects?
-
 type Program struct {
 	proc *core.Process
 
+	arenaStart core.Address
+	bitmapEnd  core.Address
+
+	spans []span
+
 	goroutines []*Goroutine
-	globals    []NamedPtr
+	globals    []Var
 
 	// runtime info
 	info rtinfo.Info
@@ -29,8 +32,14 @@ type Program struct {
 	// list of types
 	types []*Type
 
-	// Cached dwarf -> native type map
-	typeMap map[dwarf.Type]*Type
+	// map from address of runtime._type to *Type
+	runtimeMap map[core.Address]*Type
+
+	// map from dwarf type to *Type
+	dwarfMap map[dwarf.Type]*Type
+
+	// All live objects in the heap.
+	objects []Object
 }
 
 // Process returns the core passed to Core().
@@ -40,6 +49,14 @@ func (p *Program) Process() *core.Process {
 
 func (p *Program) Goroutines() []*Goroutine {
 	return p.goroutines
+}
+
+func (p *Program) Globals() []Var {
+	return p.globals
+}
+
+func (p *Program) Objects() []Object {
+	return p.objects
 }
 
 type Goroutine struct {
@@ -69,7 +86,14 @@ type Frame struct {
 	f        *Func        // function whose activation record this frame is
 	off      int64        // offset of pc in this function
 	min, max core.Address // extent of stack frame
-	vars     []NamedPtr
+
+	// Set of locations that contain a pointer. Note that this list
+	// may contain locations outside the frame (in particular, the args
+	// for the frame).
+	ptrs []core.Address
+
+	// TODO: get from dwarf
+	//	vars []Var
 }
 
 // Func returns the function for which this frame is an activation record.
@@ -91,22 +115,15 @@ func (f *Frame) Offset() int64 {
 // this function is suspended.
 // For frames that are currently active, Roots() might be inaccurate.
 // TODO: how would we fix that?  Play forward to a safepoint?  Unclear.
-func (f *Frame) Roots() []NamedPtr {
-	return f.vars
+func (f *Frame) Roots() []Var {
+	//return f.vars
+	return nil
 }
 
-// TODO: non-ptr fields?
-
-type NamedPtr struct {
+type Var struct {
 	Name string // global name, field name, ...
-	Typ  *Type  // type of
-	Ptr  core.Address
-}
-
-// An Object is a heap
-type Object struct {
-	typ  *Type // if known, nil otherwise
-	refs []NamedPtr
+	Addr core.Address
+	Type *Type
 }
 
 // A Type is the representation of the type of a Go object.
@@ -116,22 +133,56 @@ type Type struct {
 	// When one or the other is incomplete, some of these fields
 	// may be empty.
 
-	r      region // inferior region holding a runtime._type (or nil if there isn't one)
+	r  region     // inferior region holding a runtime._type (or nil if there isn't one)
+	dt dwarf.Type // equivalent dwarf type, or nil.
+
 	name   string
 	size   int64
 	ptrs   []bool  // ptr/noptr bits. Last entry is always true (if nonzero in length).
 	fields []Field // If we have dwarf information, this contains full field names&types.
+
+	// Referred-to type. Depends on dt.(type)
+	// *dwarf.PtrType, *dwarf.FuncType (others?) type of pointed-to variable.
+	sub *Type
+
+	//TODO: export?
+	isString bool //TODO: remove?
+	isEface  bool
+	isIface  bool
 }
+
+// TODO: isString, isSlice
 
 type Field struct {
 	Name string
-	Type Type
+	Type *Type
 	Off  int64
 }
 
 func (t *Type) String() string {
 	return t.name
 }
+
+func (t *Type) Fields() []Field {
+	return t.fields
+}
+
+func (t *Type) DWARF() dwarf.Type {
+	return t.dt
+}
+
+func (t *Type) Sub() *Type {
+	return t.sub
+}
+
+func (t *Type) IsEface() bool {
+	return t.isEface
+}
+func (t *Type) IsIface() bool {
+	return t.isIface
+}
+
+// TODO: replace Fields() with DWARF()
 
 type module struct {
 	r region // inferior region holding a runtime.moduledata
@@ -150,4 +201,19 @@ type Func struct {
 
 func (f *Func) Name() string {
 	return f.name
+}
+
+// An Object represents an object in the Go heap.
+type Object struct {
+	Addr core.Address
+	Size int64
+	Type *Type
+}
+
+// A span is a set of addresses that contain heap objects.
+// Note: We record only heap spans. The spans list does not include stack spans.
+type span struct {
+	min  core.Address
+	max  core.Address
+	size int64 // size of objects in span
 }

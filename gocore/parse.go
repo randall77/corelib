@@ -4,7 +4,7 @@ import (
 	"debug/dwarf"
 	"fmt"
 	"os"
-	"reflect"
+	"sort"
 	"strings"
 	"text/tabwriter"
 
@@ -12,11 +12,27 @@ import (
 	"github.com/randall77/corelib/rtinfo"
 )
 
-// magicNumber is a constant used to find/verify the breadcrumb. "locatebreadcrumb"
-const magicNumber = 0x10ca7eb0eadc000b
-
 // Core takes a loaded core file and extracts Go information from it.
 func Core(proc *core.Process) (p *Program, err error) {
+	// Check symbol table to make sure we know the addresses
+	// of some critical runtime data structures.
+	m, err := proc.Symbols()
+	if err != nil {
+		return nil, err
+	}
+	for _, s := range rtSymbols {
+		if m["runtime."+s.name] == 0 {
+			// We're missing some address that we need.
+			return nil, fmt.Errorf("can't find runtime data structure %s. Is the binary unstripped?", s.name)
+		}
+	}
+	// TODO: is the symbol table redundant with the DWARF info? Could we just use DWARF?
+
+	// Make sure we have DWARF info.
+	if _, err := proc.DWARF(); err != nil {
+		return nil, err
+	}
+
 	// Guard against failures of proc.Read* routines.
 	/*
 		defer func() {
@@ -33,39 +49,20 @@ func Core(proc *core.Process) (p *Program, err error) {
 		}()
 	*/
 
-	p = &Program{proc: proc, typeMap: map[dwarf.Type]*Type{}}
-
-	// Check symbol table for runtime addresses.
-	m := proc.Symbols()
-	for _, s := range rtsymbols {
-		if m["runtime."+s.name] == 0 {
-			// We're missing some address that we need.
-			m = nil
-			break
-		}
-	}
-
-	// If symbol info doesn't have what we need, check the breadcrumb.
-	if m == nil {
-		m = readBreadcrumb(proc)
-		// Check again.
-		for _, s := range rtsymbols {
-			if m["runtime."+s.name] == 0 {
-				return nil, fmt.Errorf("can't find runtime data structures %s", s.name)
-			}
-		}
-	}
+	p = &Program{proc: proc, runtimeMap: map[core.Address]*Type{}, dwarfMap: map[dwarf.Type]*Type{}}
 
 	// Load the build version.
 	a := m["runtime.buildVersion"]
 	ptr := proc.ReadAddress(a)
-	len := int(proc.ReadUintptr(a.Add(proc.PtrSize())))
+	len := proc.ReadInt(a.Add(proc.PtrSize()))
 	b := make([]byte, len)
 	proc.ReadAt(b, ptr)
 	version := string(b)
 	fmt.Printf("buildVersion %s\n", version)
 
 	// Build context with runtime information.
+	// TODO: use DWARF info instead. Not known yet, how to use
+	// dwarf info to find runtime constants.
 	info := rtinfo.Find(proc.Arch(), version)
 	if info.Structs == nil {
 		return nil, fmt.Errorf("no runtime info for %s:%s", proc.Arch(), version)
@@ -75,20 +72,23 @@ func Core(proc *core.Process) (p *Program, err error) {
 
 	// Initialize runtime regions.
 	p.runtime = map[string]region{}
-	for _, s := range rtsymbols {
+	for _, s := range rtSymbols {
 		p.runtime[s.name] = region{c: c, a: m["runtime."+s.name], typ: s.typ}
 	}
 
-	p.readSpans()
+	p.readDWARFTypes()
 	p.readModules()
-	p.readDWARF()
+	p.readSpans()
 	p.readMs()
 	p.readGs()
+	p.readObjects()
+	p.typeHeap()
 	return
 }
 
-// rtsymbols is a list of all the runtime globals and their types that we need to access.
-var rtsymbols = [...]struct {
+// rtSymbols is a list of all the runtime globals that we need to access,
+// together with their types.
+var rtSymbols = [...]struct {
 	name, typ string
 }{
 	{"mheap_", "runtime.mheap"},
@@ -103,176 +103,6 @@ var rtsymbols = [...]struct {
 	{"buildVersion", "string"},
 }
 
-// readBreadcrumb uses the breadcrumb that the runtime stored in the core dump
-// to find the addresses of runtime variables that we need.
-func readBreadcrumb(proc *core.Process) map[string]core.Address {
-	// Search for magic number at start of breadcrumb.
-	var a core.Address
-	for _, m := range proc.Mappings() {
-		if m.Perm() != core.Read|core.Write {
-			// The breadcrumb is in writeable memory.
-			// Avoid finding the breadcrumb initialization code.
-			continue
-		}
-		data := make([]byte, m.Size())
-		proc.ReadAt(data, m.Min())
-		// TODO: use bytes.Index?
-		for i := 0; i <= len(data)-8; i++ {
-			if proc.ByteOrder().Uint64(data[i:]) == magicNumber {
-				//fmt.Printf("found magic number at %x\n", prog.Vaddr+uint64(i))
-				if a != 0 {
-					panic(fmt.Errorf("Found more than one breadcrumb at %x and %x. Please rerun and provide an unstripped binary.", a, m.Min()+core.Address(i)))
-				}
-				a = m.Min().Add(int64(i))
-			}
-		}
-	}
-
-	if a == 0 {
-		panic(fmt.Errorf("Can't find symbols or breadcrumb. Binary must not be stripped, or the core file must be from Go version 1.9 or later."))
-	}
-	//fmt.Printf("breadcrumb at %x\n", a)
-
-	// Read breadcrumb.
-	a += 8
-	rev := proc.ReadUint64(a)
-	a += 8
-
-	// Grab the locations of important runtime variables
-	// that were stored in the breadcrumb.
-	var ss []string
-	switch rev {
-	case 1:
-		// different revisions might have a different set or order
-		// of addresses of symbols listed in the breadcrumb.
-		ss = []string{
-			"buildVersion",
-			"mheap_",
-			"memstats",
-			"sched",
-			"allfin",
-			"finq",
-			"allgs",
-			"allm",
-			"allp",
-			"modulesSlice",
-		}
-	default:
-		panic(fmt.Errorf("unknown revision %d\n", rev))
-	}
-
-	m := map[string]core.Address{}
-	for _, s := range ss {
-		m["runtime."+s] = proc.ReadAddress(a)
-		a = a.Add(proc.PtrSize())
-	}
-
-	return m
-}
-
-func (g *Program) readDWARF() {
-	const (
-		// Constants that maybe should go in debug/dwarf
-		DW_OP_addr = 3
-	)
-	d := g.proc.DWARF()
-	r := d.Reader()
-
-	// Find global variables.
-	for e, err := r.Next(); e != nil && err == nil; e, err = r.Next() {
-		switch e.Tag {
-		case dwarf.TagVariable:
-			loc := e.AttrField(dwarf.AttrLocation).Val.([]byte)
-			if loc[0] != DW_OP_addr {
-				break
-			}
-			var addr core.Address
-			if g.proc.PtrSize() == 8 {
-				addr = core.Address(g.proc.ByteOrder().Uint64(loc[1:]))
-			} else {
-				addr = core.Address(g.proc.ByteOrder().Uint32(loc[1:]))
-			}
-			t, err := d.Type(e.AttrField(dwarf.AttrType).Val.(dwarf.Offset))
-			if err != nil {
-				panic(err)
-			}
-			typ := g.findType(t)
-			name := e.AttrField(dwarf.AttrName).Val.(string)
-			fmt.Printf("global %s %x %s\n", name, addr, typ)
-			g.globals = append(g.globals, NamedPtr{
-				Name: name,
-				Typ:  typ,
-				Ptr:  addr,
-			})
-		}
-	}
-	for e, err := r.Next(); e != nil && err == nil; e, err = r.Next() {
-		//fmt.Printf("%s\n", e)
-		switch e.Tag {
-		case dwarf.TagSubprogram, dwarf.TagFormalParameter, dwarf.TagVariable:
-			continue
-		case dwarf.TagPointerType:
-			//name := e.AttrField(dwarf.AttrName).Val.(string)
-			//fmt.Printf("pointer: %s\n", name)
-			//fmt.Printf("pointer %s: *%d\n", name, e.AttrField(dwarf.AttrType).Val.(dwarf.Offset))
-		case dwarf.TagBaseType:
-			//name := e.AttrField(dwarf.AttrName).Val.(string)
-			//fmt.Printf("   base: %s size=%d\n", name, e.AttrField(dwarf.AttrByteSize).Val.(int64))
-		case dwarf.TagStructType:
-			name := e.AttrField(dwarf.AttrName).Val.(string)
-			size := e.AttrField(dwarf.AttrByteSize).Val.(int64)
-			_ = name
-			_ = size
-			//fmt.Printf(" struct: %s size=%d\n", name, size)
-		case dwarf.TagSubroutineType:
-			//name := e.AttrField(dwarf.AttrName).Val.(string)
-			//fmt.Printf("    sub: %s\n", name)
-
-		}
-		// PointerType -> unsafe.Pointer
-		// BaseType -> uintptr
-		// StructType
-		//   Member
-		// Typedef (name for StructType?)
-	}
-
-}
-
-// findType returns the native type corresponding to the dwarf type,
-// or nil if it can't be found or isn't unique.
-func (g *Program) findType(t dwarf.Type) *Type {
-	if typ := g.typeMap[t]; typ != nil {
-		return typ
-	}
-	name := dwarfTypeName(t)
-	ptrs := dwarfPtrBits(t, g.proc.PtrSize())
-	size := t.Size()
-
-	n := 0
-	var typ *Type
-	for _, t := range g.types {
-		if t.size == size && t.name == name && boolEqual(ptrs, t.ptrs) {
-			typ = t
-			n++
-		}
-	}
-	if n == 0 {
-		fmt.Printf("no match for %s:%d %s\n", name, size, reflect.TypeOf(t))
-	}
-	if n > 1 {
-		fmt.Printf("duplicate matches for %s:%d\n", name, size)
-		typ = nil
-	}
-	if typ == nil {
-		// This type does not exist at runtime. Make a dummy type
-		// from the dwarf info.
-		typ = &Type{name: name, size: size, ptrs: nil}
-		// TODO: need to fill in ptrs?
-	}
-	g.typeMap[t] = typ // cache result
-	return typ
-}
-
 func (g *Program) readSpans() {
 	mheap := g.runtime["mheap_"]
 	c := mheap.c
@@ -283,6 +113,9 @@ func (g *Program) readSpans() {
 	arenaEnd := core.Address(mheap.Field("arena_end").Uintptr())
 	bitmapEnd := core.Address(mheap.Field("bitmap").Uintptr())
 	bitmapStart := bitmapEnd.Add(-int64(mheap.Field("bitmap_mapped").Uintptr()))
+
+	g.arenaStart = arenaStart
+	g.bitmapEnd = bitmapEnd
 
 	var all int64
 	var text int64
@@ -321,6 +154,8 @@ func (g *Program) readSpans() {
 			// Any other anonymous mapping is bss.
 			// TODO: how to distinguish original bss from anonymous mmap?
 			bss += size
+		default:
+			panic("weird mapping " + m.Perm().String())
 		}
 	}
 	pageSize := c.info.Constants["_PageSize"]
@@ -345,9 +180,11 @@ func (g *Program) readSpans() {
 	n := allspans.SliceLen()
 	for i := int64(0); i < n; i++ {
 		s := allspans.SliceIndex(i).Deref()
+		min := core.Address(s.Field("startAddr").Uintptr())
 		elemSize := int64(s.Field("elemsize").Uintptr())
 		nPages := int64(s.Field("npages").Uintptr())
 		spanSize := nPages * pageSize
+		max := min.Add(spanSize)
 		allSpanSize += spanSize
 		switch s.Field("state").Cast("uint8").Uint8() {
 		case spanInUse:
@@ -372,17 +209,7 @@ func (g *Program) readSpans() {
 				}
 			}
 			spanRoundSize += spanSize - n*elemSize
-			/*
-				fmt.Printf("%d size: ", elemSize)
-				for i := uint64(0); i < n; i++ {
-					c := "-"
-					if alloc[i] {
-						c = "+"
-					}
-					fmt.Printf("%s", c)
-				}
-				fmt.Printf("\n")
-			*/
+			g.spans = append(g.spans, span{min: min, max: max, size: elemSize})
 		case spanFree:
 			freeSpanSize += spanSize
 		case spanDead:
@@ -439,18 +266,30 @@ func (g *Program) readSpans() {
 		panic("missing from manual")
 	}
 	t.Flush()
+
+	// sort spans for later binary search.
+	sort.Slice(g.spans, func(i, j int) bool {
+		return g.spans[i].min < g.spans[j].min
+	})
 }
 
 func (g *Program) readModules() {
+	// Make a runtime name -> Type map for existing DWARF types.
+	dwarf := map[string][]*Type{}
+	for _, t := range g.types {
+		name := runtimeName(t.dt)
+		dwarf[name] = append(dwarf[name], t)
+	}
+
 	ms := g.runtime["modulesSlice"].Deref()
 	n := ms.SliceLen()
 	for i := int64(0); i < n; i++ {
 		md := ms.SliceIndex(i).Deref()
-		g.modules = append(g.modules, g.readModule(md))
+		g.modules = append(g.modules, g.readModule(md, dwarf))
 	}
 }
 
-func (g *Program) readModule(r region) *module {
+func (g *Program) readModule(r region, dwarf map[string][]*Type) *module {
 	m := &module{r: r}
 	//fmt.Printf("module %s %x %x\n", r.Field("modulename").String(), r.Field("text").Uintptr(), r.Field("etext").Uintptr())
 	gcdata := r.Field("gcdatamask")
@@ -474,7 +313,7 @@ func (g *Program) readModule(r region) *module {
 		g.funcTab.add(min, max, f)
 	}
 
-	// Read the types.
+	// Read the types in this module.
 	types := core.Address(r.Field("types").Uintptr())
 	typelinks := r.Field("typelinks")
 	ntypelinks := typelinks.SliceLen()
@@ -506,12 +345,36 @@ func (g *Program) readModule(r region) *module {
 			ptrs = ptrs[:len(ptrs)-1]
 		}
 
-		t := &Type{r: r, name: name, size: size, ptrs: ptrs}
-		fmt.Printf("type %s %d\n", t.name, t.size)
-		g.types = append(g.types, t)
+		// Find dwarf entry corresponding to this one, if any.
+		// It must match name, size, and pointer bits.
+		var candidates []*Type
+		for _, t := range dwarf[name] {
+			if t.r.a == 0 && size == t.size && boolEqual(ptrs, t.ptrs) {
+				candidates = append(candidates, t)
+			}
+		}
+		if len(candidates) > 1 {
+			//fmt.Printf("runtime type %s ambiguous. Could be:\n", name)
+			//for _, t := range candidates {
+			//	fmt.Printf("  %s %T\n", t.name, t.dt)
+			//}
+			// This looks mostly harmless. DWARF has some redundant entries.
+			// For example, [32]uint8 appears twice.
+			// TODO: investigate the reason for this duplication.
+		}
+		var t *Type
+		if len(candidates) > 0 {
+			t = candidates[0]
+			t.r = r
+		} else {
+			// There's no corresponding DWARF type.  Make our own.
+			t = &Type{r: r, name: name, size: size, ptrs: ptrs}
+			// TODO: add fields:?
+			g.types = append(g.types, t)
+			//fmt.Printf("rtonly type %s %d\n", name, size)
+		}
+		g.runtimeMap[r.a] = t
 	}
-
-	// Find mapping from DWARF type to real tpye.
 
 	return m
 }
@@ -710,11 +573,7 @@ func (prog *Program) readFrame(c *context, sp, pc core.Address) *Frame {
 			// TODO: -16 for amd64. Return address and parent's frame pointer
 			for i := int64(0); i < int64(nbit); i++ {
 				if prog.proc.ReadUint8(bits.Add(i/8))>>uint(i&7)&1 != 0 {
-					frame.vars = append(frame.vars, NamedPtr{
-						Name: fmt.Sprintf("local%d", i),
-						Typ:  nil, // TODO: get type from dwarf
-						Ptr:  prog.proc.ReadAddress(base.Add(i * prog.proc.PtrSize())),
-					})
+					frame.ptrs = append(frame.ptrs, base.Add(i*prog.proc.PtrSize()))
 				}
 			}
 		}
@@ -734,93 +593,13 @@ func (prog *Program) readFrame(c *context, sp, pc core.Address) *Frame {
 			// TODO: add to base for LR archs.
 			for i := int64(0); i < int64(nbit); i++ {
 				if prog.proc.ReadUint8(bits.Add(i/8))>>uint(i&7)&1 != 0 {
-					frame.vars = append(frame.vars, NamedPtr{
-						Name: fmt.Sprintf("arg%d", i),
-						Typ:  nil, // TODO: get type from dwarf
-						Ptr:  prog.proc.ReadAddress(base.Add(i * prog.proc.PtrSize())),
-					})
+					frame.ptrs = append(frame.ptrs, base.Add(i*prog.proc.PtrSize()))
 				}
 			}
 		}
 	}
 
 	return frame
-}
-
-// Generate the name for a dwarf type. Unlike t.String(), this function
-// tries to generate the same name as the runtime would for that type.
-func dwarfTypeName(t dwarf.Type) string {
-	switch x := t.(type) {
-	case *dwarf.PtrType:
-		return "*" + dwarfTypeName(x.Type)
-	case *dwarf.ArrayType:
-		return fmt.Sprintf("[%d]%s", x.Count, dwarfTypeName(x.Type))
-	case *dwarf.StructType:
-		if !strings.HasPrefix(x.StructName, "struct {") {
-			return x.StructName
-		}
-		s := "struct {"
-		first := true
-		for _, f := range x.Field {
-			if !first {
-				s += ";"
-			}
-			name := f.Name
-			if i := strings.Index(name, "."); i >= 0 {
-				name = name[i+1:]
-			}
-			s += fmt.Sprintf(" %s %s", name, dwarfTypeName(f.Type))
-			first = false
-		}
-		s += " }"
-		return s
-	default:
-		return t.String()
-	}
-}
-
-func dwarfPtrBits(t dwarf.Type, ptrSize int64) []bool {
-	size := t.Size()
-	if size < 0 { // For weird types, like <unspecified>
-		return nil
-	}
-	size /= ptrSize
-	b := make([]bool, size)
-	dwarfPtrBits1(t, ptrSize, b)
-	// Trim trailing false entries.
-	for len(b) > 0 && !b[len(b)-1] {
-		b = b[:len(b)-1]
-	}
-	return b
-}
-func dwarfPtrBits1(t dwarf.Type, ptrSize int64, b []bool) {
-	switch x := t.(type) {
-	case *dwarf.PtrType, *dwarf.FuncType:
-		// TODO: Maybe remove FuncType: is FuncType the base type of a go func?
-		b[0] = true
-	case *dwarf.ArrayType:
-		n := x.Type.Size()
-		if n%ptrSize != 0 { // can't have pointers
-			break
-		}
-		n /= ptrSize // convert to words
-		for i := int64(0); i < x.Count; i++ {
-			dwarfPtrBits1(x.Type, ptrSize, b)
-			b = b[n:]
-		}
-	case *dwarf.StructType:
-		for _, f := range x.Field {
-			if f.ByteOffset%ptrSize != 0 { // can't have pointers
-				continue
-			}
-			dwarfPtrBits1(f.Type, ptrSize, b[f.ByteOffset/ptrSize:])
-		}
-	case *dwarf.TypedefType:
-		dwarfPtrBits1(x.Type, ptrSize, b)
-	}
-	// TODO: void type? Is it just unsafe.Pointer -> void*?
-	// TODO: I think map, chan are just PtrType.
-	// TODO: string, interface, slice are structs and should just work.
 }
 
 func boolEqual(a, b []bool) bool {

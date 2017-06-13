@@ -16,6 +16,7 @@ import (
 	"debug/dwarf"
 	"encoding/binary"
 	"os"
+	"strings"
 )
 
 // An Address is a location in inferior's address space.
@@ -59,12 +60,25 @@ type Process struct {
 	ptrSize   int64              // 4 or 8
 	byteOrder binary.ByteOrder   //
 	syms      map[string]Address // symbols (could be empty if executable is stripped)
+	symErr    error              // an error encountered while reading symbols
 	dwarf     *dwarf.Data        // debugging info (could be nil)
+	dwarfErr  error              // an error encountered while reading DWARF
 }
 
 // Mappings returns a list of virtual memory mappings for p.
 func (p *Process) Mappings() []*Mapping {
 	return p.maps
+}
+
+// Writeable reports whether the address is writeable (by the inferior at the time of the core dump).
+func (p *Process) Writeable(a Address) bool {
+	// TODO: binary search
+	for _, m := range p.maps {
+		if m.min <= a && a < m.max {
+			return m.perm&Write != 0
+		}
+	}
+	return false
 }
 
 // Threads returns information about each OS thread in the inferior.
@@ -84,14 +98,14 @@ func (p *Process) ByteOrder() binary.ByteOrder {
 	return p.byteOrder
 }
 
-func (p *Process) DWARF() *dwarf.Data {
-	return p.dwarf
+func (p *Process) DWARF() (*dwarf.Data, error) {
+	return p.dwarf, p.dwarfErr
 }
 
 // Symbols returns a mapping from name to inferior address.
 // Symbols might not be available with core files from stripped binaries.
-func (p *Process) Symbols() map[string]Address {
-	return p.syms
+func (p *Process) Symbols() (map[string]Address, error) {
+	return p.syms, p.symErr
 }
 
 // A Mapping represents a contiguous subset of the inferior's address space.
@@ -172,3 +186,21 @@ const (
 	Write
 	Exec
 )
+
+func (p Perm) String() string {
+	var a [3]string
+	b := a[:0]
+	if p&Read != 0 {
+		b = append(b, "Read")
+	}
+	if p&Write != 0 {
+		b = append(b, "Write")
+	}
+	if p&Exec != 0 {
+		b = append(b, "Exec")
+	}
+	if len(b) == 0 {
+		b = append(b, "None")
+	}
+	return strings.Join(b, "|")
+}

@@ -268,17 +268,25 @@ func (p *Process) readExec() error {
 		return err
 	}
 	if e.Type != elf.ET_EXEC {
-		return fmt.Errorf("%s is not an executable file", p.exec)
+		return fmt.Errorf("%s is not an executable file", p.exec.Name())
 	}
 	syms, err := e.Symbols()
 	if err != nil {
-		return fmt.Errorf("can't find symbols in %s", p.exec)
+		p.symErr = fmt.Errorf("can't read symbols from %s", p.exec.Name())
+	} else {
+		p.syms = make(map[string]Address, len(syms))
+		for _, s := range syms {
+			p.syms[s.Name] = Address(s.Value)
+		}
 	}
-	p.syms = make(map[string]Address, len(syms))
-	for _, s := range syms {
-		p.syms[s.Name] = Address(s.Value)
+	// An error while reading DWARF info is not an immediate error,
+	// but any error will be returned if the caller asks for DWARF.
+	dwarf, err := e.DWARF()
+	if err != nil {
+		p.dwarfErr = fmt.Errorf("can't read DWARF info from %s: %s", p.exec.Name(), err)
+	} else {
+		p.dwarf = dwarf
 	}
-	p.dwarf, _ = e.DWARF()
 	return nil
 }
 
