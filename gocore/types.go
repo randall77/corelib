@@ -24,6 +24,8 @@ type Program struct {
 	// runtime globals
 	runtime map[string]region
 
+	// A module is a loadable unit. Most Go programs have 1, programs
+	// which load plugins will have more.
 	modules []*module
 
 	// address -> function mapping
@@ -136,22 +138,16 @@ type Type struct {
 	r  region     // inferior region holding a runtime._type (or nil if there isn't one)
 	dt dwarf.Type // equivalent dwarf type, or nil.
 
-	name   string
-	size   int64
-	ptrs   []bool  // ptr/noptr bits. Last entry is always true (if nonzero in length).
-	fields []Field // If we have dwarf information, this contains full field names&types.
-
-	// Referred-to type. Depends on dt.(type)
-	// *dwarf.PtrType, *dwarf.FuncType (others?) type of pointed-to variable.
-	sub *Type
+	name string
+	size int64
+	ptrs []bool // ptr/noptr bits. Last entry is always true (if nonzero in length).
 
 	//TODO: export?
-	isString bool //TODO: remove?
+	isString bool
+	isSlice  bool
 	isEface  bool
 	isIface  bool
 }
-
-// TODO: isString, isSlice
 
 type Field struct {
 	Name string
@@ -163,16 +159,8 @@ func (t *Type) String() string {
 	return t.name
 }
 
-func (t *Type) Fields() []Field {
-	return t.fields
-}
-
 func (t *Type) DWARF() dwarf.Type {
 	return t.dt
-}
-
-func (t *Type) Sub() *Type {
-	return t.sub
 }
 
 func (t *Type) IsEface() bool {
@@ -180,6 +168,10 @@ func (t *Type) IsEface() bool {
 }
 func (t *Type) IsIface() bool {
 	return t.isIface
+}
+
+func (t *Type) Size() int64 {
+	return t.size
 }
 
 // TODO: replace Fields() with DWARF()
@@ -196,7 +188,14 @@ type Func struct {
 	frameSize pcTab // map from pc to frame size at that pc
 	pcdata    []int32
 	funcdata  []core.Address
-	stackMap  pcTab // map from pc to stack map # (index into locals and args bitmaps)
+	stackMap  pcTab      // map from pc to stack map # (index into locals and args bitmaps)
+	closure   *Type      // the type to use for closures of this function. Lazily allocated.
+	vars      []stackVar // parameters and local variables
+}
+
+type stackVar struct {
+	off int64 // offset from the frame's max
+	t   *Type
 }
 
 func (f *Func) Name() string {
@@ -205,9 +204,10 @@ func (f *Func) Name() string {
 
 // An Object represents an object in the Go heap.
 type Object struct {
-	Addr core.Address
-	Size int64
-	Type *Type
+	Addr   core.Address
+	Size   int64
+	Type   *Type
+	Repeat int64 // Known repeat count for Type
 }
 
 // A span is a set of addresses that contain heap objects.

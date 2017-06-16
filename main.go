@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"text/tabwriter"
 
 	"github.com/randall77/corelib/core"
 	"github.com/randall77/corelib/gocore"
@@ -52,35 +53,44 @@ func main() {
 		}
 	}
 
-	// Object histogram (bytes per type).
+	// Produce an object histogram (bytes per type).
 	type bucket struct {
 		name  string
+		size  int64
 		count int64
-		bytes int64
 	}
-	live := map[string]*bucket{}
+	var buckets []*bucket
+	m := map[string]*bucket{}
 	for _, obj := range c.Objects() {
 		var name string
 		if obj.Type == nil {
 			name = fmt.Sprintf("unk%d", obj.Size)
 		} else {
 			name = obj.Type.String()
+			n := obj.Size / obj.Type.Size()
+			if n > 1 {
+				if obj.Repeat < n {
+					name = fmt.Sprintf("[%d+%d?]%s", obj.Repeat, n-obj.Repeat, name)
+				} else {
+					name = fmt.Sprintf("[%d]%s", obj.Repeat, name)
+				}
+			}
 		}
-		b := live[name]
+		b := m[name]
 		if b == nil {
-			b = &bucket{name: name}
-			live[name] = b
+			b = &bucket{name: name, size: obj.Size}
+			buckets = append(buckets, b)
+			m[name] = b
 		}
 		b.count++
-		b.bytes += obj.Size
 	}
-	a := make([]*bucket, 0, len(live))
-	for _, b := range live {
-		a = append(a, b)
+	sort.Slice(buckets, func(i, j int) bool {
+		return buckets[i].size*buckets[i].count > buckets[j].size*buckets[j].count
+	})
+	t := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.AlignRight)
+	fmt.Fprintf(t, "%s\t%s\t%s\t %s\n", "count", "size", "bytes", "type")
+	for _, e := range buckets {
+		fmt.Fprintf(t, "%d\t%d\t%d\t %s\n", e.count, e.size, e.count*e.size, e.name)
 	}
-	sort.Slice(a, func(i, j int) bool { return a[i].bytes > a[j].bytes })
-	fmt.Printf("%12s %8s %s\n", "bytes", "count", "type")
-	for _, e := range a {
-		fmt.Printf("%12d %8d %s\n", e.bytes, e.count, e.name)
-	}
+	t.Flush()
 }

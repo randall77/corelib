@@ -53,7 +53,7 @@ func (a Address) Align(x int64) Address {
 
 // A Process represents the state of the process that core dumped.
 type Process struct {
-	exec      *os.File           // executable (TODO: more than one for shlibs?)
+	exec      []*os.File         // executables (more than one for shlibs)
 	maps      []*Mapping         // virtual address mappings
 	threads   []*Thread          // os threads (TODO: map from pid?)
 	arch      string             // amd64, ...
@@ -102,7 +102,9 @@ func (p *Process) DWARF() (*dwarf.Data, error) {
 	return p.dwarf, p.dwarfErr
 }
 
-// Symbols returns a mapping from name to inferior address.
+// Symbols returns a mapping from name to inferior address, along with
+// any error encountered during reading the symbol information.
+// (There may be both an error and some returned symbols.)
 // Symbols might not be available with core files from stripped binaries.
 func (p *Process) Symbols() (map[string]Address, error) {
 	return p.syms, p.symErr
@@ -114,15 +116,14 @@ type Mapping struct {
 	max  Address
 	perm Perm
 
-	f    *os.File // file backing this region
-	off  int64    // offset of start of this mapping in the file
-	size int64    // amount of available data (usually, max-min)
+	f   *os.File // file backing this region
+	off int64    // offset of start of this mapping in f
 
-	// For copy-on-write regions originally backed by a file, we keep
-	// the original mapping here.
-	origF    *os.File
-	origOff  int64
-	origSize int64
+	// For regions originally backed by a file but now in the core file,
+	// (probably because it is copy-on-write) this is the original data source.
+	// This info is just for printing; the data in this source is stale.
+	origF   *os.File
+	origOff int64
 }
 
 // Min returns the lowest virtual address of the mapping.

@@ -78,6 +78,7 @@ var constants = [...]string{
 	"_Gsyscall",
 	"_Gwaiting",
 	"_Gscan",
+	"_Gdead",
 	"_PCDATA_StackMapIndex",
 	"_FUNCDATA_LocalsPointerMaps",
 	"_FUNCDATA_ArgsPointerMaps",

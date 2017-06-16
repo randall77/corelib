@@ -49,7 +49,11 @@ func Core(proc *core.Process) (p *Program, err error) {
 		}()
 	*/
 
-	p = &Program{proc: proc, runtimeMap: map[core.Address]*Type{}, dwarfMap: map[dwarf.Type]*Type{}}
+	p = &Program{
+		proc:       proc,
+		runtimeMap: map[core.Address]*Type{},
+		dwarfMap:   map[dwarf.Type]*Type{},
+	}
 
 	// Load the build version.
 	a := m["runtime.buildVersion"]
@@ -165,13 +169,13 @@ func (g *Program) readSpans() {
 	spanManual := uint8(c.info.Constants["_MSpanManual"])
 	spanDead := uint8(c.info.Constants["_MSpanDead"])
 	spanFree := uint8(c.info.Constants["_MSpanFree"])
+
 	// Process spans.
 	allspans := mheap.Field("allspans")
 	var allSpanSize int64
 	var freeSpanSize int64
 	var manualSpanSize int64
 	var inUseSpanSize int64
-	var deadSpanSize int64
 	var allocSize int64
 	var freeSize int64
 	var spanRoundSize int64
@@ -213,7 +217,7 @@ func (g *Program) readSpans() {
 		case spanFree:
 			freeSpanSize += spanSize
 		case spanDead:
-			deadSpanSize += spanSize
+			// These are just deallocated span descriptors. They use no heap.
 		case spanManual:
 			manualSpanSize += spanSize
 			manualAllocSize += spanSize
@@ -250,22 +254,21 @@ func (g *Program) readSpans() {
 	pr(3, "alloc", manualAllocSize)
 	pr(3, "free", manualFreeSize)
 	pr(2, "free spans", freeSpanSize)
-	pr(2, "dead spans", deadSpanSize)
 	pr(1, "ptr bitmap", bitmap)
 	pr(1, "span table", spanTable)
-	if all != text+readOnly+data+bss+heap+bitmap+spanTable {
-		panic("missing from all")
-	}
-	if heap != inUseSpanSize+manualSpanSize+freeSpanSize+deadSpanSize {
-		panic("missing from heap")
-	}
-	if inUseSpanSize != allocSize+freeSize+spanRoundSize {
-		panic("missing from in use")
-	}
-	if manualSpanSize != manualAllocSize+manualFreeSize {
-		panic("missing from manual")
-	}
 	t.Flush()
+	if got := text + readOnly + data + bss + heap + bitmap + spanTable; got != all {
+		panic(fmt.Sprintf("missing from all=%d got=%d", all, got))
+	}
+	if got := inUseSpanSize + manualSpanSize + freeSpanSize; got != heap {
+		panic(fmt.Sprintf("missing from heap=%d got=%d", heap, got))
+	}
+	if got := allocSize + freeSize + spanRoundSize; got != inUseSpanSize {
+		panic(fmt.Sprintf("missing from inuse=%d got=%d", inUseSpanSize, got))
+	}
+	if got := manualAllocSize + manualFreeSize; got != manualSpanSize {
+		panic(fmt.Sprintf("missing from manual=%d got=%d", manualSpanSize, got))
+	}
 
 	// sort spans for later binary search.
 	sort.Slice(g.spans, func(i, j int) bool {
@@ -454,13 +457,17 @@ func (g *Program) readMs() {
 	}
 }
 
-func (g *Program) readGs() {
+func (p *Program) readGs() {
 	// TODO: figure out how to "flush" running Gs.
-	allgs := g.runtime["allgs"]
+	allgs := p.runtime["allgs"]
 	n := allgs.SliceLen()
 	for i := int64(0); i < n; i++ {
 		r := allgs.SliceIndex(i).Deref()
-		g.goroutines = append(g.goroutines, g.readG(r))
+		g := p.readG(r)
+		if g == nil {
+			continue
+		}
+		p.goroutines = append(p.goroutines, g)
 	}
 }
 
@@ -509,6 +516,8 @@ func (prog *Program) readG(r region) *Goroutine {
 		sp = core.Address(sched.Field("sp").Uintptr())
 		pc = core.Address(sched.Field("pc").Uintptr())
 		// TODO: copystack, others?
+	case status == uint32(prog.info.Constants["_Gdead"]):
+		return nil
 	}
 	//fmt.Printf("G %d lo=%x sp=%x hi=%x pc=%x\n", status, stk.Field("lo").Uintptr(), sp, stk.Field("hi").Uintptr(), pc)
 	for {

@@ -1,10 +1,10 @@
 package core
 
 import (
-	"bytes"
 	"debug/elf"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -26,8 +26,29 @@ func Core(coreFile string) (*Process, error) {
 
 	// Double-check that we have complete data available for all mappings.
 	for _, m := range p.maps {
-		if m.f == nil || m.size != int64(m.max-m.min) {
+		if m.f == nil {
 			return nil, fmt.Errorf("incomplete mapping %x %x", m.min, m.max)
+		}
+	}
+
+	// Sort mappings.
+	sort.Slice(p.maps, func(i, j int) bool {
+		return p.maps[i].min < p.maps[j].min
+	})
+
+	// Merge mappings, just to clean up a bit.
+	maps := p.maps[1:]
+	p.maps = p.maps[:1]
+	for _, m := range maps {
+		k := p.maps[len(p.maps)-1]
+		if m.min == k.max &&
+			m.perm == k.perm &&
+			m.f == k.f &&
+			m.off == k.off+k.Size() {
+			k.max = m.max
+			// TODO: also check origF?
+		} else {
+			p.maps = append(p.maps, m)
 		}
 	}
 
@@ -98,25 +119,39 @@ func (p *Process) readCore(core *os.File) error {
 }
 
 func (p *Process) readLoad(f *os.File, e *elf.File, prog *elf.Prog) error {
-	m := new(Mapping)
-	m.min = Address(prog.Vaddr)
-	m.max = Address(prog.Vaddr + prog.Memsz)
+	min := Address(prog.Vaddr)
+	max := min.Add(int64(prog.Memsz))
+	var perm Perm
 	if prog.Flags&elf.PF_R != 0 {
-		m.perm |= Read
+		perm |= Read
 	}
 	if prog.Flags&elf.PF_W != 0 {
-		m.perm |= Write
+		perm |= Write
 		if prog.Filesz != prog.Memsz {
 			return fmt.Errorf("writeable section not complete in core %x %x %x %x", prog.Filesz, prog.Memsz)
 		}
 	}
 	if prog.Flags&elf.PF_X != 0 {
-		m.perm |= Exec
+		perm |= Exec
 	}
-	m.f = f
-	m.off = int64(prog.Off)
-	m.size = int64(prog.Filesz)
+	if perm == 0 {
+		// TODO: keep these nothing-mapped mappings?
+		return nil
+	}
+	m := &Mapping{min: min, max: max, perm: perm}
 	p.maps = append(p.maps, m)
+	if prog.Filesz > 0 {
+		// Data backing this mapping is in the core file.
+		m.f = f
+		m.off = int64(prog.Off)
+		if prog.Filesz < uint64(m.max.Sub(m.min)) {
+			// We only have partial data for this mapping in the core file.
+			// Trim the mapping and allocate an anonymous mapping for the remainder.
+			m2 := &Mapping{min: m.min.Add(int64(prog.Filesz)), max: m.max, perm: m.perm}
+			m.max = m2.min
+			p.maps = append(p.maps, m2)
+		}
+	}
 	return nil
 }
 
@@ -183,66 +218,89 @@ func (p *Process) readNTFile(f *os.File, e *elf.File, desc []byte) error {
 			name = filenames
 			filenames = ""
 		}
-		m := p.findMapping(min, max)
-		if m == nil {
-			return fmt.Errorf("can't find mapping corresponding to note %x %x %s", min, max, name)
-		}
-		if m.perm&Write != 0 {
-			// The mapped file might have stale data. Ingore mapped file.
-			// We've already checked that writeable mappings are complete
-			// in the core file.
-			m.origF = f
-			m.origOff = int64(off)
-			m.origSize = max.Sub(min)
-			continue
-		}
-		f, err := os.Open(name)
+
+		backing, err := os.Open(name)
 		if err != nil {
 			// Can't find mapped file.
 			// TODO: if we debug on a different machine or something,
 			// provide a way to map from core's file spec to a real file.
 			return fmt.Errorf("can't open mapped file: %v\n", err)
 		}
-		if m.size > 0 {
-			// The core dump has some data.
-			// Just to be sure, compare it with the mapped file.
-			// TODO: might fail if we map a file rw-, modify it, then change the mapping to r--.
-			b0 := make([]byte, m.size)
-			if _, err := m.f.ReadAt(b0, m.off); err != nil {
-				return err
-			}
-			b1 := make([]byte, m.size)
-			if _, err := f.ReadAt(b1, int64(off)); err != nil {
-				return err
-			}
-			if !bytes.Equal(b0, b1) {
-				return fmt.Errorf("core and mapped file don't agree in mapping %x %x", m.min, m.max)
-			}
-		}
-		// Update mapping to use the mapped file as the source of data
-		// instead of the core file.
-		m.f = f
-		m.off = int64(off)
-		m.size = max.Sub(min)
 
-		// Save a reference to the executable file.
-		// We keep it around so we can try to get symbols out of it.
-		if m.perm&Exec != 0 {
-			if p.exec != nil {
-				return fmt.Errorf("two executables! %s %s\n", p.exec.Name(), f.Name())
+		// TODO: this is O(n^2). Shouldn't be a big problem in practice.
+		p.splitMappingsAt(min)
+		p.splitMappingsAt(max)
+		for _, m := range p.maps {
+			if m.max <= min || m.min >= max {
+				continue
 			}
-			p.exec = f
+			// m should now be entirely in [min,max]
+			if !(m.min >= min && m.max <= max) {
+				panic("mapping overlapping end of file region")
+			}
+			if m.f == nil {
+				if m.perm&Write != 0 {
+					panic("writeable data missing from core")
+				}
+				m.f = backing
+				m.off = int64(off) + m.min.Sub(min)
+			} else {
+				// Data is both in the core file and in a mapped file.
+				// The mapped file may be stale (even if it is readonly now,
+				// it may have been writeable at some point).
+				// Keep the file+offset just for printing.
+				m.origF = backing
+				m.origOff = int64(off) + m.min.Sub(min)
+			}
+
+			// Save a reference to the executable files.
+			// We keep them around so we can try to get symbols from them.
+			// TODO: we should really only get those files for which the
+			// symbols return the correct addresses given where the file is
+			// mapped in memory. Not sure what to do here.
+			// Seems to work for the executable, for now.
+			if m.perm&Exec != 0 {
+				found := false
+				for _, x := range p.exec {
+					if x == m.f {
+						found = true
+						break
+					}
+
+				}
+				if !found {
+					p.exec = append(p.exec, m.f)
+				}
+			}
 		}
 	}
 	return nil
 }
-func (p *Process) findMapping(min, max Address) *Mapping {
+
+// splitMappingsAt ensures that a is not in the middle of any mapping.
+// Splits mappings as necessary.
+func (p *Process) splitMappingsAt(a Address) {
 	for _, m := range p.maps {
-		if m.min == min && m.max == max {
-			return m
+		if a < m.min || a > m.max {
+			continue
 		}
+		if a == m.min || a == m.max {
+			return
+		}
+		// Split this mapping at a.
+		m2 := new(Mapping)
+		*m2 = *m
+		m.max = a
+		m2.min = a
+		if m2.f != nil {
+			m2.off += m.Size()
+		}
+		if m2.origF != nil {
+			m2.origOff += m.Size()
+		}
+		p.maps = append(p.maps, m2)
+		return
 	}
-	return nil
 }
 
 func (p *Process) readPRStatus(f *os.File, e *elf.File, desc []byte) error {
@@ -263,29 +321,32 @@ func (p *Process) readPRStatus(f *os.File, e *elf.File, desc []byte) error {
 }
 
 func (p *Process) readExec() error {
-	e, err := elf.NewFile(p.exec)
-	if err != nil {
-		return err
-	}
-	if e.Type != elf.ET_EXEC {
-		return fmt.Errorf("%s is not an executable file", p.exec.Name())
-	}
-	syms, err := e.Symbols()
-	if err != nil {
-		p.symErr = fmt.Errorf("can't read symbols from %s", p.exec.Name())
-	} else {
-		p.syms = make(map[string]Address, len(syms))
-		for _, s := range syms {
-			p.syms[s.Name] = Address(s.Value)
+	p.syms = map[string]Address{}
+	for _, exec := range p.exec {
+		e, err := elf.NewFile(exec)
+		if err != nil {
+			return err
 		}
-	}
-	// An error while reading DWARF info is not an immediate error,
-	// but any error will be returned if the caller asks for DWARF.
-	dwarf, err := e.DWARF()
-	if err != nil {
-		p.dwarfErr = fmt.Errorf("can't read DWARF info from %s: %s", p.exec.Name(), err)
-	} else {
-		p.dwarf = dwarf
+		if e.Type != elf.ET_EXEC {
+			// This happens for shared libraries, the core file itself, ...
+			continue
+		}
+		syms, err := e.Symbols()
+		if err != nil {
+			p.symErr = fmt.Errorf("can't read symbols from %s", exec.Name())
+		} else {
+			for _, s := range syms {
+				p.syms[s.Name] = Address(s.Value)
+			}
+		}
+		// An error while reading DWARF info is not an immediate error,
+		// but any error will be returned if the caller asks for DWARF.
+		dwarf, err := e.DWARF()
+		if err != nil {
+			p.dwarfErr = fmt.Errorf("can't read DWARF info from %s: %s", exec.Name(), err)
+		} else {
+			p.dwarf = dwarf
+		}
 	}
 	return nil
 }
