@@ -81,11 +81,15 @@ func (p *Program) readObjects() {
 }
 
 func (p *Program) findSpan(a core.Address) span {
-	// TODO: binary search
-	for _, s := range p.spans {
-		if s.min <= a && a < s.max {
-			return s
-		}
+	i := sort.Search(len(p.spans), func(i int) bool {
+		return p.spans[i].max > a
+	})
+	if i == len(p.spans) {
+		return span{}
+	}
+	s := p.spans[i]
+	if a >= s.min {
+		return s
 	}
 	return span{}
 }

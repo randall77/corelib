@@ -255,10 +255,10 @@ func (p *Process) readNTFile(f *os.File, e *elf.File, desc []byte) error {
 
 			// Save a reference to the executable files.
 			// We keep them around so we can try to get symbols from them.
-			// TODO: we should really only get those files for which the
+			// TODO: we should really only keep those files for which the
 			// symbols return the correct addresses given where the file is
 			// mapped in memory. Not sure what to do here.
-			// Seems to work for the executable, for now.
+			// Seems to work for the base executable, for now.
 			if m.perm&Exec != 0 {
 				found := false
 				for _, x := range p.exec {
@@ -351,29 +351,40 @@ func (p *Process) readExec() error {
 	return nil
 }
 
+func (p *Process) findMapping(a Address) *Mapping {
+	i := sort.Search(len(p.maps), func(i int) bool {
+		return p.maps[i].max > a
+	})
+	if i == len(p.maps) {
+		return nil
+	}
+	m := p.maps[i]
+	if a >= m.min {
+		return m
+	}
+	return nil
+}
+
 // All the Read* functions below will panic if something goes wrong.
 
 // ReadAt reads len(b) bytes at address a in the inferior
 // and stores them in b.
 func (p *Process) ReadAt(b []byte, a Address) {
-	// TODO: binary instead of linear search
-	for _, m := range p.maps {
-		if a >= m.min && a < m.max {
-			n := m.max.Sub(a)
-			if n < int64(len(b)) {
-				// Read range straddles the end of this mapping.
-				// Issue a second request for the tail of the read.
-				p.ReadAt(b[n:], m.max)
-				b = b[:n]
-			}
-			_, err := m.f.ReadAt(b, m.off+a.Sub(m.min))
-			if err != nil {
-				panic(err)
-			}
-			return
-		}
+	m := p.findMapping(a)
+	if m == nil {
+		panic(fmt.Errorf("address %x is not mapped in the core file", a))
 	}
-	panic(fmt.Errorf("address %x is not mapped in the core file", a))
+	n := m.max.Sub(a)
+	if n < int64(len(b)) {
+		// Read range straddles the end of this mapping.
+		// Issue a second request for the tail of the read.
+		p.ReadAt(b[n:], m.max)
+		b = b[:n]
+	}
+	_, err := m.f.ReadAt(b, m.off+a.Sub(m.min))
+	if err != nil {
+		panic(err)
+	}
 }
 
 // ReadUint8 returns a uint8 read from address a of the inferior.

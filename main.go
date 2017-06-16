@@ -48,9 +48,6 @@ func main() {
 		fmt.Printf("G stacksize=%x\n", g.Stack())
 		for _, f := range g.Frames() {
 			fmt.Printf("  %016x %016x %s+0x%x\n", f.Min(), f.Max(), f.Func().Name(), f.Offset())
-			for _, v := range f.Roots() {
-				fmt.Printf("    %20s: %16x %s\n", v.Name, v.Addr, v.Type)
-			}
 		}
 	}
 
@@ -96,7 +93,6 @@ func main() {
 		total += e.count * e.size
 	}
 	t.Flush()
-	fmt.Printf("total %d\n", total)
 
 	alloc := c.Stats().Child("heap").Child("in use spans").Child("alloc")
 	alloc.Children = []*gocore.Stats{

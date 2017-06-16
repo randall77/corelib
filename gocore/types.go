@@ -79,9 +79,7 @@ type Goroutine struct {
 	stackSize int64  // current stack allocation
 	frames    []*Frame
 
-	// TODO:
-	// defers: []*Frame also?
-	// in-progress panics
+	// TODO: defers, in-progress panics
 }
 
 // Stack returns the total allocated stack for g.
@@ -107,8 +105,7 @@ type Frame struct {
 	// for the frame).
 	ptrs []core.Address
 
-	// TODO: get from dwarf
-	//	vars []Var
+	// TODO: keep vars from dwarf around?
 }
 
 // Func returns the function for which this frame is an activation record.
@@ -124,15 +121,6 @@ func (f *Frame) Max() core.Address {
 }
 func (f *Frame) Offset() int64 {
 	return f.off
-}
-
-// Roots returns all the pointers that are live at the point at which
-// this function is suspended.
-// For frames that are currently active, Roots() might be inaccurate.
-// TODO: how would we fix that?  Play forward to a safepoint?  Unclear.
-func (f *Frame) Roots() []Var {
-	//return f.vars
-	return nil
 }
 
 type Var struct {
@@ -155,7 +143,7 @@ type Type struct {
 	size int64
 	ptrs []bool // ptr/noptr bits. Last entry is always true (if nonzero in length).
 
-	//TODO: export?
+	//TODO: export these?
 	isString bool
 	isSlice  bool
 	isEface  bool
@@ -186,8 +174,6 @@ func (t *Type) IsIface() bool {
 func (t *Type) Size() int64 {
 	return t.size
 }
-
-// TODO: replace Fields() with DWARF()
 
 type module struct {
 	r region // inferior region holding a runtime.moduledata

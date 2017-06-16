@@ -61,7 +61,7 @@ func Core(proc *core.Process) (p *Program, err error) {
 	p.buildVersion = string(b)
 
 	// Build context with runtime information.
-	// TODO: use DWARF info instead. Not known yet, how to use
+	// TODO: use DWARF info instead. Not known yet: how to use
 	// dwarf info to find runtime constants.
 	info := rtinfo.Find(proc.Arch(), p.buildVersion)
 	if info.Structs == nil {
@@ -492,9 +492,9 @@ func (p *Program) readG(r region) *Goroutine {
 		sched := r.Field("sched")
 		sp = core.Address(sched.Field("sp").Uintptr())
 		pc = core.Address(sched.Field("pc").Uintptr())
-		// TODO: copystack, others?
 	case status == uint32(p.info.Constants["_Gdead"]):
 		return nil
+		// TODO: copystack, others?
 	}
 	for {
 		f := p.readFrame(r.c, sp, pc)

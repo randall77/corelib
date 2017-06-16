@@ -31,12 +31,7 @@ func (p *Program) readDWARFTypes() {
 	r = d.Reader()
 	for e, err := r.Next(); e != nil && err == nil; e, err = r.Next() {
 		switch e.Tag {
-		case dwarf.TagArrayType:
-			// TODO
-			dt, _ := d.Type(e.Offset)
-			t := p.dwarfMap[dt]
-			t.ptrs = dwarfPtrBits(dt, p.proc.PtrSize())
-		case dwarf.TagStructType:
+		case dwarf.TagArrayType, dwarf.TagPointerType, dwarf.TagStringType, dwarf.TagStructType, dwarf.TagBaseType, dwarf.TagSubroutineType, dwarf.TagTypedef:
 			dt, _ := d.Type(e.Offset)
 			t := p.dwarfMap[dt]
 			t.ptrs = dwarfPtrBits(dt, p.proc.PtrSize())
@@ -46,11 +41,6 @@ func (p *Program) readDWARFTypes() {
 			if len(t.name) >= 9 && t.name[:9] == "struct []" {
 				t.isSlice = true
 			}
-		case dwarf.TagPointerType, dwarf.TagStringType, dwarf.TagSubroutineType:
-			dt, _ := d.Type(e.Offset)
-			t := p.dwarfMap[dt]
-			// TODO: functype->some sort of closure typing?
-			t.ptrs = dwarfPtrBits(dt, p.proc.PtrSize())
 		}
 	}
 

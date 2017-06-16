@@ -72,13 +72,11 @@ func (p *Process) Mappings() []*Mapping {
 
 // Writeable reports whether the address is writeable (by the inferior at the time of the core dump).
 func (p *Process) Writeable(a Address) bool {
-	// TODO: binary search
-	for _, m := range p.maps {
-		if m.min <= a && a < m.max {
-			return m.perm&Write != 0
-		}
+	m := p.findMapping(a)
+	if m == nil {
+		return false
 	}
-	return false
+	return m.perm&Write != 0
 }
 
 // Threads returns information about each OS thread in the inferior.
