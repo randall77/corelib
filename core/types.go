@@ -161,6 +161,15 @@ func (m *Mapping) Offset() int64 {
 func (m *Mapping) CopyOnWrite() bool {
 	return m.origF != nil
 }
+func (m *Mapping) OrigFile() string {
+	if m.origF == nil {
+		return ""
+	}
+	return m.origF.Name()
+}
+func (m *Mapping) OrigOffset() int64 {
+	return m.origOff
+}
 
 type Thread struct {
 	pid  uint64   // thread/process ID

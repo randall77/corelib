@@ -18,6 +18,8 @@ func main() {
 		log.Fatalf("can't load %s: %v", file, err)
 	}
 	fmt.Printf("arch %s\n", p.Arch())
+	t := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.AlignRight)
+	fmt.Fprintf(t, "min\tmax\tperm\tsource\toriginal\t\n")
 	for _, m := range p.Mappings() {
 		perm := ""
 		if m.Perm()&core.Read != 0 {
@@ -35,8 +37,13 @@ func main() {
 		} else {
 			perm += "-"
 		}
-		fmt.Printf("%016x %016x %s %s @ %x\n", m.Min(), m.Max(), perm, m.File(), m.Offset())
+		fmt.Fprintf(t, "%x\t%x\t%s\t%s@%x\t", m.Min(), m.Max(), perm, m.File(), m.Offset())
+		if m.OrigFile() != "" {
+			fmt.Fprintf(t, "%s@%x", m.OrigFile(), m.OrigOffset())
+		}
+		fmt.Fprintf(t, "\t\n")
 	}
+	t.Flush()
 
 	c, err := gocore.Core(p)
 	if err != nil {
@@ -85,7 +92,7 @@ func main() {
 	sort.Slice(buckets, func(i, j int) bool {
 		return buckets[i].size*buckets[i].count > buckets[j].size*buckets[j].count
 	})
-	t := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.AlignRight)
+	t = tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.AlignRight)
 	fmt.Fprintf(t, "%s\t%s\t%s\t %s\n", "count", "size", "bytes", "type")
 	var total int64
 	for _, e := range buckets {

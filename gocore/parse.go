@@ -284,10 +284,6 @@ func (p *Program) readModules() {
 
 func (p *Program) readModule(r region, dwarf map[string][]*Type) *module {
 	m := &module{r: r}
-	gcdata := r.Field("gcdatamask")
-	gcbss := r.Field("gcbssmask")
-	_ = gcdata
-	_ = gcbss
 	pcln := r.Field("pclntable")
 
 	// Read the pc->function table
