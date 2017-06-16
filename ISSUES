@@ -1,0 +1,26 @@
+This is a list of the many issues to figure out for this tool.
+
+What do we do about running goroutines? The topmost frame isn't necessarily
+at a safepoint, so we don't know what's live and what's not, there may be ptrs
+in registers, etc. Could we interpret forward to a safepoint?
+Just ignore the topmost frame?
+
+Getting runtime constants like _Gidle out of the runtime.
+We may just have to assume fixed constants for these.  If they change
+from one version to the next, tough luck.
+
+Find arch-independent way of getting sp/pc from OS thread.
+
+Type inference:
+  We don't have types for closures
+  We don't have types for targets of unsafe.Pointer
+  We don't have types for autotmp variables on the stack (TODO: true?)
+   - Heschi's work may fix this
+  Maybe others? (defer/panic/finalizer?)
+
+Type merging. Particularly for interior pointers. When we have a heap object
+and we know two offset/type pairs for that object, how do we merge the two?
+How do we display them?
+
+On a related note, how do we handle trailing data after the known type?
+For now I'm just assuming the type repeats as much as will fit.
