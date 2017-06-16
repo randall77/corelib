@@ -46,26 +46,6 @@ var archs = [...]arch{
 	// TODO: fill in
 }
 
-// structs lists struct types in the runtime that we need
-// to know the layout of.
-// (TODO:or we can just dump everything?)
-var structs = [...]string{
-	"g",
-	"m",
-	"p",
-	"mheap",
-	"mspan",
-	"moduledata",
-	"bitvector",
-	"stack",
-	"gobuf",
-	"functab",
-	"_func",
-	"stackmap",
-	"_type",
-	"itab",
-}
-
 var constants = [...]string{
 	"_MSpanDead",
 	"_MSpanInUse",
@@ -284,46 +264,14 @@ func extract(w io.Writer, goroot string, version string, arch arch) {
 	// Dump offsets of fields in critical types.
 	fmt.Fprintf(w, "register(\"%s\", \"%s\",\n", arch.name, version)
 	fmt.Fprintf(w, "Info {\n")
-	fmt.Fprintf(w, "WordSize: %d,\n", arch.wordSize)
-	fmt.Fprintf(w, "Structs: map[string]StructInfo{\n")
-	for _, s := range structs {
-		dumpStruct(w, runtime, conf.TypeChecker.Sizes, s)
-	}
-	fmt.Fprintf(w, "},\n")
 	fmt.Fprintf(w, "Constants: map[string]int64 {\n")
 	for _, c := range constants {
 		dumpConstant(w, runtime, c)
 	}
 	fmt.Fprintf(w, "},\n")
 	fmt.Fprintf(w, "})\n")
-
-	// Print all the global variables
-	for _, n := range runtime.Names() {
-		obj := runtime.Lookup(n)
-		if _, ok := obj.(*types.Var); ok {
-			fmt.Printf("global %s\n", n)
-		}
-	}
 }
 
-func dumpStruct(w io.Writer, scope *types.Scope, sizes types.Sizes, name string) {
-	t := scope.Lookup(name).(*types.TypeName).Type().Underlying().(*types.Struct)
-	s := sizes.Sizeof(t)
-	a := sizes.Alignof(t)
-	s = (s + a - 1) / a * a
-	fmt.Fprintf(w, "\"runtime.%s\": StructInfo{Size:%d,Fields:map[string]FieldInfo{\n", name, s)
-
-	n := t.NumFields()
-	fields := make([]*types.Var, n)
-	for i := 0; i < n; i++ {
-		fields[i] = t.Field(i)
-	}
-	offs := sizes.Offsetsof(fields)
-	for i := 0; i < n; i++ {
-		fmt.Fprintf(w, "\"%s\": FieldInfo{Off:%d,Typ:\"%s\"},\n", fields[i].Name(), offs[i], fields[i].Type())
-	}
-	fmt.Fprintf(w, "}},\n")
-}
 func dumpConstant(w io.Writer, scope *types.Scope, name string) {
 	x, ok := constant.Uint64Val(scope.Lookup(name).(*types.Const).Val())
 	if !ok {

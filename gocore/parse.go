@@ -60,23 +60,22 @@ func Core(proc *core.Process) (p *Program, err error) {
 	proc.ReadAt(b, ptr)
 	p.buildVersion = string(b)
 
-	// Build context with runtime information.
-	// TODO: use DWARF info instead. Not known yet: how to use
-	// dwarf info to find runtime constants.
-	info := rtinfo.Find(proc.Arch(), p.buildVersion)
-	if info.Structs == nil {
+	p.readDWARFTypes()
+	p.findRuntimeInfo()
+
+	// Find information about runtime data structures.
+	// TODO: Not known yet: how to use dwarf info to find runtime constants.
+	p.info = rtinfo.Find(proc.Arch(), p.buildVersion)
+	if p.info.Constants == nil {
 		return nil, fmt.Errorf("no runtime info for %s:%s", proc.Arch(), p.buildVersion)
 	}
-	c := &context{proc: proc, info: info}
-	p.info = info
 
 	// Initialize runtime regions.
 	p.runtime = map[string]region{}
 	for _, s := range rtSymbols {
-		p.runtime[s.name] = region{c: c, a: m["runtime."+s.name], typ: s.typ}
+		p.runtime[s.name] = region{p: p, a: m["runtime."+s.name], typ: s.typ}
 	}
 
-	p.readDWARFTypes()
 	p.readModules()
 	p.readSpans()
 	p.readMs()
@@ -105,7 +104,6 @@ var rtSymbols = [...]struct {
 
 func (p *Program) readSpans() {
 	mheap := p.runtime["mheap_"]
-	c := mheap.c
 
 	spanTableStart := mheap.Field("spans").SlicePtr().Address()
 	spanTableEnd := spanTableStart.Add(mheap.Field("spans").SliceCap() * p.proc.PtrSize())
@@ -158,13 +156,13 @@ func (p *Program) readSpans() {
 			panic("weird mapping " + m.Perm().String())
 		}
 	}
-	pageSize := c.info.Constants["_PageSize"]
+	pageSize := p.info.Constants["_PageSize"]
 
 	// Span types
-	spanInUse := uint8(c.info.Constants["_MSpanInUse"])
-	spanManual := uint8(c.info.Constants["_MSpanManual"])
-	spanDead := uint8(c.info.Constants["_MSpanDead"])
-	spanFree := uint8(c.info.Constants["_MSpanFree"])
+	spanInUse := uint8(p.info.Constants["_MSpanInUse"])
+	spanManual := uint8(p.info.Constants["_MSpanManual"])
+	spanDead := uint8(p.info.Constants["_MSpanDead"])
+	spanFree := uint8(p.info.Constants["_MSpanFree"])
 
 	// Process spans.
 	allspans := mheap.Field("allspans")
@@ -307,7 +305,7 @@ func (p *Program) readModule(r region, dwarf map[string][]*Type) *module {
 	ntypelinks := typelinks.SliceLen()
 	for i := int64(0); i < ntypelinks; i++ {
 		off := typelinks.SliceIndex(i).Int32()
-		r := region{c: r.c, a: types.Add(int64(off)), typ: "runtime._type"}
+		r := region{p: p, a: types.Add(int64(off)), typ: "runtime._type"}
 		size := int64(r.Field("size").Uintptr())
 		x := types.Add(int64(r.Field("str").Cast("int32").Int32()))
 		n := uint16(p.proc.ReadUint8(x.Add(1)))<<8 + uint16(p.proc.ReadUint8(x.Add(2)))
@@ -367,26 +365,26 @@ func (p *Program) readModule(r region, dwarf map[string][]*Type) *module {
 func (m *module) readFunc(r region, pcln region) *Func {
 	f := &Func{module: m, r: r}
 	f.entry = core.Address(r.Field("entry").Uintptr())
-	f.name = r.c.proc.ReadCString(pcln.SliceIndex(int64(r.Field("nameoff").Int32())).a)
-	f.frameSize.read(r.c.proc, pcln.SliceIndex(int64(r.Field("pcsp").Int32())).a)
+	f.name = r.p.proc.ReadCString(pcln.SliceIndex(int64(r.Field("nameoff").Int32())).a)
+	f.frameSize.read(r.p.proc, pcln.SliceIndex(int64(r.Field("pcsp").Int32())).a)
 
 	// Parse pcdata and funcdata, which are laid out beyond the end of the _func.
-	a := r.a.Add(int64(r.c.info.Structs["runtime._func"].Size))
+	a := r.a.Add(int64(r.p.rtStructs["runtime._func"].size))
 	n := r.Field("npcdata").Int32()
 	for i := int32(0); i < n; i++ {
-		f.pcdata = append(f.pcdata, r.c.proc.ReadInt32(a))
+		f.pcdata = append(f.pcdata, r.p.proc.ReadInt32(a))
 		a = a.Add(4)
 	}
-	a = a.Align(r.c.proc.PtrSize())
+	a = a.Align(r.p.proc.PtrSize())
 	n = r.Field("nfuncdata").Int32()
 	for i := int32(0); i < n; i++ {
-		f.funcdata = append(f.funcdata, r.c.proc.ReadAddress(a))
-		a = a.Add(r.c.proc.PtrSize())
+		f.funcdata = append(f.funcdata, r.p.proc.ReadAddress(a))
+		a = a.Add(r.p.proc.PtrSize())
 	}
 
 	// Read pcln tables we need.
-	if stackmap := int(r.c.info.Constants["_PCDATA_StackMapIndex"]); stackmap < len(f.pcdata) {
-		f.stackMap.read(r.c.proc, pcln.SliceIndex(int64(f.pcdata[stackmap])).a)
+	if stackmap := int(r.p.info.Constants["_PCDATA_StackMapIndex"]); stackmap < len(f.pcdata) {
+		f.stackMap.read(r.p.proc, pcln.SliceIndex(int64(f.pcdata[stackmap])).a)
 	}
 
 	return f
@@ -399,9 +397,9 @@ func pcdata(r region, pcln region, n int64) core.Address {
 	if n >= int64(r.Field("npcdata").Int32()) {
 		return 0
 	}
-	a := r.a.Add(int64(r.c.info.Structs["runtime._func"].Size + 4*n))
+	a := r.a.Add(int64(r.p.rtStructs["runtime._func"].size + 4*n))
 
-	off := r.c.proc.ReadInt32(a)
+	off := r.p.proc.ReadInt32(a)
 	return pcln.SliceIndex(int64(off)).a
 }
 
@@ -412,11 +410,11 @@ func funcdata(r region, n int64) core.Address {
 		return 0
 	}
 	x := r.Field("npcdata").Int32()
-	if x&1 != 0 && r.c.proc.PtrSize() == 8 {
+	if x&1 != 0 && r.p.proc.PtrSize() == 8 {
 		x++
 	}
-	a := r.a.Add(int64(r.c.info.Structs["runtime._func"].Size + 4*int64(x) + r.c.proc.PtrSize()*n))
-	return r.c.proc.ReadAddress(a)
+	a := r.a.Add(int64(r.p.rtStructs["runtime._func"].size + 4*int64(x) + r.p.proc.PtrSize()*n))
+	return r.p.proc.ReadAddress(a)
 }
 
 func (p *Program) readMs() {
@@ -493,7 +491,7 @@ func (p *Program) readG(r region) *Goroutine {
 		// TODO: copystack, others?
 	}
 	for {
-		f := p.readFrame(r.c, sp, pc)
+		f := p.readFrame(sp, pc)
 		if f.f.name == "runtime.goexit" {
 			break
 		}
@@ -527,7 +525,7 @@ func (p *Program) readG(r region) *Goroutine {
 	return g
 }
 
-func (p *Program) readFrame(c *context, sp, pc core.Address) *Frame {
+func (p *Program) readFrame(sp, pc core.Address) *Frame {
 	f := p.funcTab.find(pc)
 	if f == nil {
 		panic(fmt.Errorf("  pc not found %x\n", pc))
@@ -540,7 +538,7 @@ func (p *Program) readFrame(c *context, sp, pc core.Address) *Frame {
 
 	// Find live ptrs in locals
 	if x := int(p.info.Constants["_FUNCDATA_LocalsPointerMaps"]); x < len(f.funcdata) {
-		locals := region{c: c, a: f.funcdata[x], typ: "runtime.stackmap"}
+		locals := region{p: p, a: f.funcdata[x], typ: "runtime.stackmap"}
 		n := locals.Field("n").Int32()       // # of bitmaps
 		nbit := locals.Field("nbit").Int32() // # of bits per bitmap
 		idx := f.stackMap.find(off)
@@ -560,7 +558,7 @@ func (p *Program) readFrame(c *context, sp, pc core.Address) *Frame {
 	}
 	// Same for args
 	if x := int(p.info.Constants["_FUNCDATA_ArgsPointerMaps"]); x < len(f.funcdata) {
-		args := region{c: c, a: f.funcdata[x], typ: "runtime.stackmap"}
+		args := region{p: p, a: f.funcdata[x], typ: "runtime.stackmap"}
 		n := args.Field("n").Int32()       // # of bitmaps
 		nbit := args.Field("nbit").Int32() // # of bits per bitmap
 		idx := f.stackMap.find(off)

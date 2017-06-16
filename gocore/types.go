@@ -19,7 +19,8 @@ type Program struct {
 	globals    []Var
 
 	// runtime info
-	info rtinfo.Info
+	rtStructs map[string]structInfo
+	info      rtinfo.Info
 
 	// runtime globals
 	runtime map[string]region
@@ -230,4 +231,14 @@ func (s *Stats) Child(name string) *Stats {
 		}
 	}
 	return nil
+}
+
+type structInfo struct {
+	size   int64
+	fields map[string]fieldInfo
+}
+
+type fieldInfo struct {
+	off int64
+	typ string
 }

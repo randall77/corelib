@@ -5,20 +5,7 @@ package rtinfo
 var table = map[string]Info{}
 
 type Info struct {
-	WordSize  int64
-	Structs   map[string]StructInfo
 	Constants map[string]int64
-	// TODO: others?
-}
-
-type StructInfo struct {
-	Size   int64
-	Fields map[string]FieldInfo
-}
-
-type FieldInfo struct {
-	Off int64
-	Typ string
 }
 
 func register(arch, version string, info Info) {

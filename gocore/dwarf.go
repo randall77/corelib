@@ -464,7 +464,7 @@ func (p *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			return
 		}
 		ptr := r.ReadAddress(a.Add(ptrSize))
-		typ := r.ReadAddress(itab.Add(p.info.Structs["runtime.itab"].Fields["_type"].Off))
+		typ := r.ReadAddress(itab.Add(p.rtStructs["runtime.itab"].fields["_type"].off))
 		add(ptr, p.runtimeMap[typ], 1)
 		return
 	}
@@ -532,6 +532,28 @@ func (p *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		p.typeObject(a, p.dwarfMap[x.Type], r, add)
 	default:
 		panic(fmt.Sprintf("unknown type %T\n", t.dt))
+	}
+}
+
+// findRuntimeInfo uses DWARF information to find all the struct sizes,
+// field offsets, and field types for runtime data structures.
+// It populates p.rtStructs.
+func (p *Program) findRuntimeInfo() {
+	p.rtStructs = map[string]structInfo{}
+	for dt, _ := range p.dwarfMap {
+		rtname := runtimeName(dt)
+		if !strings.HasPrefix(rtname, "runtime.") {
+			continue
+		}
+		x, ok := dt.(*dwarf.StructType)
+		if !ok {
+			continue
+		}
+		s := structInfo{size: dt.Size(), fields: map[string]fieldInfo{}}
+		for _, f := range x.Field {
+			s.fields[f.Name] = fieldInfo{off: f.ByteOffset, typ: runtimeName(f.Type)}
+		}
+		p.rtStructs[rtname] = s
 	}
 }
 
