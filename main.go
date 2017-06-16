@@ -42,6 +42,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("could not read %s: %v", file, err)
 	}
+	fmt.Printf("build version %s\n", c.BuildVersion())
 
 	for _, g := range c.Goroutines() {
 		fmt.Printf("G stacksize=%x\n", g.Stack())
@@ -89,8 +90,36 @@ func main() {
 	})
 	t := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.AlignRight)
 	fmt.Fprintf(t, "%s\t%s\t%s\t %s\n", "count", "size", "bytes", "type")
+	var total int64
 	for _, e := range buckets {
 		fmt.Fprintf(t, "%d\t%d\t%d\t %s\n", e.count, e.size, e.count*e.size, e.name)
+		total += e.count * e.size
 	}
 	t.Flush()
+	fmt.Printf("total %d\n", total)
+
+	alloc := c.Stats().Child("heap").Child("in use spans").Child("alloc")
+	alloc.Children = []*gocore.Stats{
+		&gocore.Stats{"live", total, nil},
+		&gocore.Stats{"garbage", alloc.Val - total, nil},
+	}
+
+	tw := tabwriter.NewWriter(os.Stdout, 0, 8, 1, ' ', tabwriter.AlignRight)
+	all := c.Stats().Val
+	var printStat func(*gocore.Stats, string)
+	printStat = func(s *gocore.Stats, indent string) {
+		comment := ""
+		switch s.Name {
+		case "bss":
+			comment = "(grab bag, includes OS thread stacks, ...)"
+		case "manual spans":
+			comment = "(Go stacks)"
+		}
+		fmt.Fprintf(tw, "%s\t%d\t%6.2f%%\t %s\n", fmt.Sprintf("%-20s", indent+s.Name), s.Val, float64(s.Val)*100/float64(all), comment)
+		for _, c := range s.Children {
+			printStat(c, indent+"  ")
+		}
+	}
+	printStat(c.Stats(), "")
+	tw.Flush()
 }

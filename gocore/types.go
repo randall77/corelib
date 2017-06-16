@@ -42,6 +42,11 @@ type Program struct {
 
 	// All live objects in the heap.
 	objects []Object
+
+	// memory usage by category
+	stats *Stats
+
+	buildVersion string
 }
 
 // Process returns the core passed to Core().
@@ -59,6 +64,14 @@ func (p *Program) Globals() []Var {
 
 func (p *Program) Objects() []Object {
 	return p.objects
+}
+
+func (p *Program) Stats() *Stats {
+	return p.stats
+}
+
+func (p *Program) BuildVersion() string {
+	return p.buildVersion
 }
 
 type Goroutine struct {
@@ -216,4 +229,19 @@ type span struct {
 	min  core.Address
 	max  core.Address
 	size int64 // size of objects in span
+}
+
+type Stats struct {
+	Name     string
+	Val      int64
+	Children []*Stats
+}
+
+func (s *Stats) Child(name string) *Stats {
+	for _, c := range s.Children {
+		if c.Name == name {
+			return c
+		}
+	}
+	return nil
 }

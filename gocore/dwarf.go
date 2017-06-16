@@ -18,13 +18,11 @@ func (p *Program) readDWARFTypes() {
 		case dwarf.TagArrayType, dwarf.TagPointerType, dwarf.TagStringType, dwarf.TagStructType, dwarf.TagBaseType, dwarf.TagSubroutineType, dwarf.TagTypedef:
 			dt, err := d.Type(e.Offset)
 			if err != nil {
-				fmt.Printf("bad type @ %d\n", e.Offset)
-				break
+				continue
 			}
 			t := &Type{dt: dt, name: gocoreName(dt), size: dt.Size()}
 			p.types = append(p.types, t)
 			p.dwarfMap[dt] = t
-			//fmt.Printf("added %s\n", t)
 		}
 	}
 
@@ -64,8 +62,7 @@ func (p *Program) readDWARFTypes() {
 		}
 		dt, err := d.Type(e.Offset)
 		if err != nil {
-			fmt.Printf("bad type @ %d\n", e.Offset)
-			break
+			continue
 		}
 		base := dt.(*dwarf.TypedefType).Type
 		// Walk typedef chain until we reach a non-typedef type.
@@ -383,7 +380,6 @@ func (p *Program) typeHeap() {
 			panic(err)
 		}
 		// TODO: keep name around?
-		//fmt.Printf("%s %d %s\n", curfn.name, off, dt)
 		curfn.vars = append(curfn.vars, stackVar{off: off, t: p.dwarfMap[dt]})
 	}
 
@@ -442,10 +438,10 @@ func (r *frameReader) ReadAddress(a core.Address) core.Address {
 // typeObject takes an address and a type for the data at that address.
 // For each pointer it finds in the memory at that address, it calls add with the pointer
 // and the type + repeat count of the thing it points to.
-func (g *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Address, *Type, int64)) {
+func (p *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Address, *Type, int64)) {
 	// Short-cut return when there can't be any pointers.
 	// This is just an optimization.
-	ptrSize := g.proc.PtrSize()
+	ptrSize := p.proc.PtrSize()
 	if a.Align(ptrSize) != a { // not pointer-aligned
 		return
 	}
@@ -467,8 +463,7 @@ func (g *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			return
 		}
 		ptr := r.ReadAddress(a.Add(ptrSize))
-		//fmt.Printf("eface %x %s\n", ptr, g.runtimeMap[typ])
-		add(ptr, g.runtimeMap[typ], 1)
+		add(ptr, p.runtimeMap[typ], 1)
 		return
 	}
 	if t.isIface {
@@ -479,9 +474,8 @@ func (g *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			return
 		}
 		ptr := r.ReadAddress(a.Add(ptrSize))
-		typ := r.ReadAddress(itab.Add(g.info.Structs["runtime.itab"].Fields["_type"].Off))
-		//fmt.Printf("iface %x %s\n", ptr, g.runtimeMap[typ])
-		add(ptr, g.runtimeMap[typ], 1)
+		typ := r.ReadAddress(itab.Add(p.info.Structs["runtime.itab"].Fields["_type"].Off))
+		add(ptr, p.runtimeMap[typ], 1)
 		return
 	}
 	// Special cases for references to repeated objects.
@@ -490,7 +484,7 @@ func (g *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		len := r.ReadInt(a.Add(ptrSize))
 		pt := t.dt.(*dwarf.StructType).Field[0].Type // always *uint8
 		et := pt.(*dwarf.PtrType).Type
-		add(ptr, g.dwarfMap[et], len)
+		add(ptr, p.dwarfMap[et], len)
 		return
 	}
 	if t.isSlice {
@@ -498,7 +492,7 @@ func (g *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		cap := r.ReadInt(a.Add(2 * ptrSize))
 		pt := t.dt.(*dwarf.StructType).Field[0].Type
 		et := pt.(*dwarf.PtrType).Type
-		add(ptr, g.dwarfMap[et], cap)
+		add(ptr, p.dwarfMap[et], cap)
 		return
 	}
 
@@ -510,7 +504,7 @@ func (g *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			// unsafe.Pointer. We don't know anything about the target object's type.
 			break
 		}
-		add(r.ReadAddress(a), g.dwarfMap[x.Type], 1)
+		add(r.ReadAddress(a), p.dwarfMap[x.Type], 1)
 	case *dwarf.FuncType:
 		// The referent is a closure. We don't know much about the
 		// type of the referent. Its first entry is a code pointer.
@@ -522,7 +516,7 @@ func (g *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			break
 		}
 		pc := r.ReadAddress(closure)
-		f := g.funcTab.find(pc)
+		f := p.funcTab.find(pc)
 		if f == nil {
 			panic(fmt.Sprintf("can't find func for closure pc %x", pc))
 		}
@@ -531,21 +525,21 @@ func (g *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			ft = &Type{name: "closure for " + f.name, size: ptrSize}
 			// TODO: better value for size?
 			f.closure = ft
-			g.types = append(g.types, ft)
+			p.types = append(p.types, ft)
 		}
-		g.typeObject(closure, ft, r, add)
+		p.typeObject(closure, ft, r, add)
 	case *dwarf.ArrayType:
-		et := g.dwarfMap[x.Type]
+		et := p.dwarfMap[x.Type]
 		n := et.size
 		for i := int64(0); i < x.Count; i++ {
-			g.typeObject(a.Add(i*n), et, r, add)
+			p.typeObject(a.Add(i*n), et, r, add)
 		}
 	case *dwarf.StructType:
 		for _, f := range x.Field {
-			g.typeObject(a.Add(f.ByteOffset), g.dwarfMap[f.Type], r, add)
+			p.typeObject(a.Add(f.ByteOffset), p.dwarfMap[f.Type], r, add)
 		}
 	case *dwarf.TypedefType:
-		g.typeObject(a, g.dwarfMap[x.Type], r, add)
+		p.typeObject(a, p.dwarfMap[x.Type], r, add)
 	default:
 		panic(fmt.Sprintf("unknown type %T\n", t.dt))
 	}
