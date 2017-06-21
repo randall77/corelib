@@ -37,7 +37,7 @@ func (p *Program) readObjects() {
 	// Goroutine roots
 	for _, g := range p.goroutines {
 		for _, f := range g.frames {
-			for _, a := range f.ptrs {
+			for a := range f.live { // TODO: iteration order matter?
 				add(p.proc.ReadAddress(a))
 			}
 		}
@@ -104,7 +104,9 @@ func (p *Program) isPtr(a core.Address) bool {
 	return p.proc.ReadUint8(p.bitmapEnd.Add(-off/4-1))>>uint(off%4)&1 != 0
 }
 
-func (p *Program) findObject(a core.Address) *Object {
+// FindObject finds the object containing a.
+// Returns nil if a doesn't point to a live heap object.
+func (p *Program) FindObject(a core.Address) *Object {
 	i := sort.Search(len(p.objects), func(i int) bool {
 		return a < p.objects[i].Addr.Add(p.objects[i].Size)
 	})

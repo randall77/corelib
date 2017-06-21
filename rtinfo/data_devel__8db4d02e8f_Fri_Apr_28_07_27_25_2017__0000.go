@@ -23,6 +23,7 @@ func init() {
 				"_FUNCDATA_ArgsPointerMaps":   0,
 				"tflagExtraStar":              2,
 				"kindGCProg":                  64,
+				"kindDirectIface":             32,
 			},
 		})
 	register("arm", "devel +8db4d02e8f Fri Apr 28 07:27:25 2017 +0000",
@@ -45,6 +46,7 @@ func init() {
 				"_FUNCDATA_ArgsPointerMaps":   0,
 				"tflagExtraStar":              2,
 				"kindGCProg":                  64,
+				"kindDirectIface":             32,
 			},
 		})
 	register("386", "devel +8db4d02e8f Fri Apr 28 07:27:25 2017 +0000",
@@ -67,6 +69,7 @@ func init() {
 				"_FUNCDATA_ArgsPointerMaps":   0,
 				"tflagExtraStar":              2,
 				"kindGCProg":                  64,
+				"kindDirectIface":             32,
 			},
 		})
 }

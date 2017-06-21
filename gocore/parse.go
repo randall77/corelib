@@ -60,6 +60,12 @@ func Core(proc *core.Process) (p *Program, err error) {
 	proc.ReadAt(b, ptr)
 	p.buildVersion = string(b)
 
+	// Initialize runtime regions.
+	p.runtime = map[string]region{}
+	for _, s := range rtSymbols {
+		p.runtime[s.name] = region{p: p, a: m["runtime."+s.name], typ: s.typ}
+	}
+
 	p.readDWARFTypes()
 	p.findRuntimeInfo()
 
@@ -70,16 +76,11 @@ func Core(proc *core.Process) (p *Program, err error) {
 		return nil, fmt.Errorf("no runtime info for %s:%s", proc.Arch(), p.buildVersion)
 	}
 
-	// Initialize runtime regions.
-	p.runtime = map[string]region{}
-	for _, s := range rtSymbols {
-		p.runtime[s.name] = region{p: p, a: m["runtime."+s.name], typ: s.typ}
-	}
-
 	p.readModules()
 	p.readSpans()
 	p.readMs()
 	p.readGs()
+	p.findRoots()
 	p.readObjects()
 	p.typeHeap()
 	return
@@ -267,8 +268,8 @@ func (p *Program) readSpans() {
 func (p *Program) readModules() {
 	// Make a runtime name -> Type map for existing DWARF types.
 	dwarf := map[string][]*Type{}
-	for _, t := range p.types {
-		name := runtimeName(t.dt)
+	for dt, t := range p.dwarfMap {
+		name := runtimeName(dt)
 		dwarf[name] = append(dwarf[name], t)
 	}
 
@@ -283,6 +284,7 @@ func (p *Program) readModules() {
 func (p *Program) readModule(r region, dwarf map[string][]*Type) *module {
 	m := &module{r: r}
 	pcln := r.Field("pclntable")
+	ptrSize := p.proc.PtrSize()
 
 	// Read the pc->function table
 	ftab := r.Field("ftab")
@@ -297,6 +299,14 @@ func (p *Program) readModule(r region, dwarf map[string][]*Type) *module {
 			panic(fmt.Errorf("entry %x and min %x don't match for %s", f.entry, min, f.name))
 		}
 		p.funcTab.add(min, max, f)
+	}
+
+	// Types to use for ptr/nonptr fields of runtime types which
+	// have no corresponding DWARF type.
+	ptr := dwarf["unsafe.Pointer"][0]
+	nonptr := dwarf["uintptr"][0]
+	if ptr == nil || nonptr == nil {
+		panic("ptr / nonptr standins missing")
 	}
 
 	// Read the types in this module.
@@ -315,27 +325,26 @@ func (p *Program) readModule(r region, dwarf map[string][]*Type) *module {
 		if r.Field("tflag").Cast("uint8").Uint8()&uint8(p.info.Constants["tflagExtraStar"]) != 0 {
 			name = name[1:]
 		}
-		// Read ptr/noptr bits
-		nptrs := int64(r.Field("ptrdata").Uintptr()) / p.proc.PtrSize()
-		ptrs := make([]bool, nptrs)
+		// Read ptr/nonptr bits
+		nptrs := int64(r.Field("ptrdata").Uintptr()) / ptrSize
+		var ptrs []int64
 		if r.Field("kind").Uint8()&uint8(p.info.Constants["kindGCProg"]) == 0 {
 			gcdata := r.Field("gcdata").Address()
 			for i := int64(0); i < nptrs; i++ {
-				ptrs[i] = p.proc.ReadUint8(gcdata.Add(i/8))>>uint(i%8)&1 != 0
+				if p.proc.ReadUint8(gcdata.Add(i/8))>>uint(i%8)&1 != 0 {
+					ptrs = append(ptrs, i*ptrSize)
+				}
 			}
 		} else {
-			// TODO: run GC program to get bits
-		}
-		// Trim trailing false entries.
-		for len(ptrs) > 0 && !ptrs[len(ptrs)-1] {
-			ptrs = ptrs[:len(ptrs)-1]
+			// TODO: run GC program to get ptr indexes
 		}
 
-		// Find dwarf entry corresponding to this one, if any.
+		// Find a Type that matches this type.
+		// (The matched type will be one constructed from DWARF info.)
 		// It must match name, size, and pointer bits.
 		var candidates []*Type
 		for _, t := range dwarf[name] {
-			if t.r.a == 0 && size == t.size && boolEqual(ptrs, t.ptrs) {
+			if size == t.size && equal(ptrs, t.ptrs()) {
 				candidates = append(candidates, t)
 			}
 		}
@@ -347,16 +356,72 @@ func (p *Program) readModule(r region, dwarf map[string][]*Type) *module {
 			// For example, [32]uint8 appears twice.
 			// TODO: investigate the reason for this duplication.
 			t = candidates[0]
-			t.r = r
 		} else {
 			// There's no corresponding DWARF type.  Make our own.
-			t = &Type{r: r, name: name, size: size, ptrs: ptrs}
+			t = &Type{name: name, size: size, Kind: KindStruct}
 			p.types = append(p.types, t)
+			n := t.size / ptrSize
+			for i := int64(0); i < n; i++ {
+				typ := nonptr
+				if len(ptrs) > 0 && ptrs[0] == i*ptrSize {
+					typ = ptr
+					ptrs = ptrs[1:]
+				}
+				t.Fields = append(t.Fields, Field{
+					Name: fmt.Sprintf("f%d", i),
+					Off:  i * ptrSize,
+					Type: typ,
+				})
+
+			}
+			if t.size%ptrSize != 0 {
+				// TODO: tail of <ptrSize data.
+			}
 		}
 		p.runtimeMap[r.a] = t
 	}
-
 	return m
+}
+
+func equal(a, b []int64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i, x := range a {
+		if x != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// ptrs returns a sorted list of pointer offsets in t.
+func (t *Type) ptrs() []int64 {
+	return t.ptrs1(nil, 0)
+}
+func (t *Type) ptrs1(s []int64, off int64) []int64 {
+	switch t.Kind {
+	case KindPtr, KindFunc, KindSlice, KindString:
+		s = append(s, off)
+	case KindIface, KindEface:
+		s = append(s, off, off+t.size/2)
+	case KindArray:
+		if t.Count > 10000 {
+			// TODO: fix this. Have a nopointers field?
+			break
+		}
+		for i := int64(0); i < t.Count; i++ {
+			s = t.Elem.ptrs1(s, off)
+			off += t.Elem.size
+		}
+	case KindStruct:
+		for _, f := range t.Fields {
+			s = f.Type.ptrs1(s, off+f.Off)
+		}
+	default:
+		// no pointers
+	}
+	return s
 }
 
 // readFunc parses a runtime._func and returns a *Func.
@@ -537,6 +602,7 @@ func (p *Program) readFrame(sp, pc core.Address) *Frame {
 	frame := &Frame{f: f, off: off, min: sp, max: sp.Add(size)}
 
 	// Find live ptrs in locals
+	live := map[core.Address]bool{}
 	if x := int(p.info.Constants["_FUNCDATA_LocalsPointerMaps"]); x < len(f.funcdata) {
 		locals := region{p: p, a: f.funcdata[x], typ: "runtime.stackmap"}
 		n := locals.Field("n").Int32()       // # of bitmaps
@@ -551,7 +617,7 @@ func (p *Program) readFrame(sp, pc core.Address) *Frame {
 			// TODO: -16 for amd64. Return address and parent's frame pointer
 			for i := int64(0); i < int64(nbit); i++ {
 				if p.proc.ReadUint8(bits.Add(i/8))>>uint(i&7)&1 != 0 {
-					frame.ptrs = append(frame.ptrs, base.Add(i*p.proc.PtrSize()))
+					live[base.Add(i*p.proc.PtrSize())] = true
 				}
 			}
 		}
@@ -571,23 +637,12 @@ func (p *Program) readFrame(sp, pc core.Address) *Frame {
 			// TODO: add to base for LR archs.
 			for i := int64(0); i < int64(nbit); i++ {
 				if p.proc.ReadUint8(bits.Add(i/8))>>uint(i&7)&1 != 0 {
-					frame.ptrs = append(frame.ptrs, base.Add(i*p.proc.PtrSize()))
+					live[base.Add(i*p.proc.PtrSize())] = true
 				}
 			}
 		}
 	}
+	frame.live = live
 
 	return frame
-}
-
-func boolEqual(a, b []bool) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i, x := range a {
-		if x != b[i] {
-			return false
-		}
-	}
-	return true
 }

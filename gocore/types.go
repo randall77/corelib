@@ -16,7 +16,6 @@ type Program struct {
 	spans []span
 
 	goroutines []*Goroutine
-	globals    []Var
 
 	// runtime info
 	rtStructs map[string]structInfo
@@ -48,6 +47,8 @@ type Program struct {
 	stats *Stats
 
 	buildVersion string
+
+	roots []Root
 }
 
 // Process returns the core passed to Core().
@@ -57,10 +58,6 @@ func (p *Program) Process() *core.Process {
 
 func (p *Program) Goroutines() []*Goroutine {
 	return p.goroutines
-}
-
-func (p *Program) Globals() []Var {
-	return p.globals
 }
 
 func (p *Program) Objects() []Object {
@@ -73,6 +70,10 @@ func (p *Program) Stats() *Stats {
 
 func (p *Program) BuildVersion() string {
 	return p.buildVersion
+}
+
+func (p *Program) Roots() []Root {
+	return p.roots
 }
 
 type Goroutine struct {
@@ -88,6 +89,11 @@ func (g *Goroutine) Stack() int64 {
 	return g.stackSize
 }
 
+// Addr returns the address of the runtime.g that identifies this goroutine.
+func (g *Goroutine) Addr() core.Address {
+	return g.r.a
+}
+
 // Frames returns the list of frames on the stack of the Goroutine.
 // The first frame is the most recent one.
 // This list is post-optimization, so any inlined calls, tail calls, etc.
@@ -101,10 +107,12 @@ type Frame struct {
 	off      int64        // offset of pc in this function
 	min, max core.Address // extent of stack frame
 
-	// Set of locations that contain a pointer. Note that this list
+	// Set of locations that contain a live pointer. Note that this set
 	// may contain locations outside the frame (in particular, the args
 	// for the frame).
-	ptrs []core.Address
+	live map[core.Address]bool
+
+	roots []Root
 
 	// TODO: keep vars from dwarf around?
 }
@@ -123,53 +131,83 @@ func (f *Frame) Max() core.Address {
 func (f *Frame) Offset() int64 {
 	return f.off
 }
+func (f *Frame) Roots() []Root {
+	return f.roots
+}
 
-type Var struct {
-	Name string // global name, field name, ...
+// A root is an area of memory that might have pointers into the heap.
+type Root struct {
+	Name string
 	Addr core.Address
 	Type *Type
+	Live map[core.Address]bool // if non-nil, the set of words in the root that are live
 }
 
 // A Type is the representation of the type of a Go object.
 type Type struct {
-	// Note: this data structure represents the merge of information
-	// from both the runtime types and DWARF information.
-	// When one or the other is incomplete, some of these fields
-	// may be empty.
-
-	r  region     // inferior region holding a runtime._type (or nil if there isn't one)
-	dt dwarf.Type // equivalent dwarf type, or nil.
-
 	name string
 	size int64
-	ptrs []bool // ptr/noptr bits. Last entry is always true (if nonzero in length).
+	Kind Kind
 
-	//TODO: export these?
-	isString bool
-	isSlice  bool
-	isEface  bool
-	isIface  bool
+	// Fields only valid for a subset of kinds.
+	Count  int64   // for kind == KindArray
+	Elem   *Type   // for kind == Kind{Ptr,Array,Slice,String}. nil for unsafe.Pointer. Always uint8 for KindString.
+	Fields []Field // for kind == KindStruct
+}
+
+type Kind uint8
+
+const (
+	KindNone Kind = iota
+	KindBool
+	KindInt
+	KindUint
+	KindFloat
+	KindComplex
+	KindArray
+	KindPtr // includes chan, func, map, unsafe.Pointer
+	KindIface
+	KindEface
+	KindSlice
+	KindString
+	KindStruct
+	KindFunc //TODO?
+)
+
+func (k Kind) String() string {
+	return [...]string{
+		"KindNone",
+		"KindBool",
+		"KindInt",
+		"KindUint",
+		"KindFloat",
+		"KindComplex",
+		"KindArray",
+		"KindPtr",
+		"KindIface",
+		"KindEface",
+		"KindSlice",
+		"KindString",
+		"KindStruct",
+		"KindFunc",
+	}[k]
 }
 
 type Field struct {
 	Name string
-	Type *Type
 	Off  int64
+	Type *Type
 }
 
 func (t *Type) String() string {
 	return t.name
 }
 
-func (t *Type) DWARF() dwarf.Type {
-	return t.dt
-}
-
 func (t *Type) IsEface() bool {
-	return t.isEface
+	return t.Kind == KindEface
 }
 func (t *Type) IsIface() bool {
-	return t.isIface
+	return t.Kind == KindIface
 }
 
 func (t *Type) Size() int64 {
@@ -188,14 +226,8 @@ type Func struct {
 	frameSize pcTab // map from pc to frame size at that pc
 	pcdata    []int32
 	funcdata  []core.Address
-	stackMap  pcTab      // map from pc to stack map # (index into locals and args bitmaps)
-	closure   *Type      // the type to use for closures of this function. Lazily allocated.
-	vars      []stackVar // parameters and local variables
-}
-
-type stackVar struct {
-	off int64 // offset from the frame's max
-	t   *Type
+	stackMap  pcTab // map from pc to stack map # (index into locals and args bitmaps)
+	closure   *Type // the type to use for closures of this function. Lazily allocated.
 }
 
 func (f *Func) Name() string {

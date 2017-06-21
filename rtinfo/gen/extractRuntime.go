@@ -64,6 +64,7 @@ var constants = [...]string{
 	"_FUNCDATA_ArgsPointerMaps",
 	"tflagExtraStar",
 	"kindGCProg",
+	"kindDirectIface",
 }
 
 func main() {

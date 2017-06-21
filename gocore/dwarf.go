@@ -8,19 +8,20 @@ import (
 	"github.com/randall77/corelib/core"
 )
 
+// read DWARF types from core dump.
 func (p *Program) readDWARFTypes() {
 	d, _ := p.proc.DWARF()
 
-	// Make a Type for each dwarf type.
+	// Make one of our own Types for each dwarf type.
 	r := d.Reader()
 	for e, err := r.Next(); e != nil && err == nil; e, err = r.Next() {
 		switch e.Tag {
-		case dwarf.TagArrayType, dwarf.TagPointerType, dwarf.TagStringType, dwarf.TagStructType, dwarf.TagBaseType, dwarf.TagSubroutineType, dwarf.TagTypedef:
+		case dwarf.TagArrayType, dwarf.TagPointerType, dwarf.TagStructType, dwarf.TagBaseType, dwarf.TagSubroutineType, dwarf.TagTypedef:
 			dt, err := d.Type(e.Offset)
 			if err != nil {
 				continue
 			}
-			t := &Type{dt: dt, name: gocoreName(dt), size: dt.Size()}
+			t := &Type{name: gocoreName(dt), size: dt.Size()}
 			p.types = append(p.types, t)
 			p.dwarfMap[dt] = t
 		}
@@ -28,23 +29,61 @@ func (p *Program) readDWARFTypes() {
 
 	// Fill in fields of types. Postponed until now so we're sure
 	// we have all the Types allocated and available.
-	r = d.Reader()
-	for e, err := r.Next(); e != nil && err == nil; e, err = r.Next() {
-		switch e.Tag {
-		case dwarf.TagArrayType, dwarf.TagPointerType, dwarf.TagStringType, dwarf.TagStructType, dwarf.TagBaseType, dwarf.TagSubroutineType, dwarf.TagTypedef:
-			dt, _ := d.Type(e.Offset)
-			t := p.dwarfMap[dt]
-			t.ptrs = dwarfPtrBits(dt, p.proc.PtrSize())
-			if t.name == "struct runtime.stringStructDWARF" {
-				t.isString = true
+	for dt, t := range p.dwarfMap {
+		switch x := dt.(type) {
+		case *dwarf.ArrayType:
+			t.Kind = KindArray
+			t.Elem = p.dwarfMap[x.Type]
+			t.Count = x.Count
+		case *dwarf.PtrType:
+			t.Kind = KindPtr
+			// unsafe.Pointer has a void base type.
+			if _, ok := x.Type.(*dwarf.VoidType); !ok {
+				t.Elem = p.dwarfMap[x.Type]
 			}
-			if len(t.name) >= 9 && t.name[:9] == "struct []" {
-				t.isSlice = true
+		case *dwarf.StructType:
+			t.Kind = KindStruct
+			for _, f := range x.Field {
+				t.Fields = append(t.Fields, Field{Name: f.Name, Type: p.dwarfMap[f.Type], Off: f.ByteOffset})
 			}
+		case *dwarf.BoolType:
+			t.Kind = KindBool
+		case *dwarf.IntType:
+			t.Kind = KindInt
+		case *dwarf.UintType:
+			t.Kind = KindUint
+		case *dwarf.FloatType:
+			t.Kind = KindFloat
+		case *dwarf.ComplexType:
+			t.Kind = KindComplex
+		case *dwarf.FuncType:
+			t.Kind = KindFunc
+		case *dwarf.TypedefType:
+			// handle these types in the loop below
+		default:
+			panic(fmt.Sprintf("unknown type %s %T", dt, dt))
 		}
 	}
 
-	// Copy info from base types into typedef.
+	// Detect strings & slices
+	for _, t := range p.types {
+		if t.Kind != KindStruct {
+			continue
+		}
+		if t.name == "string" || t.name == "struct runtime.stringStructDWARF" {
+			t.Kind = KindString
+			t.Elem = t.Fields[0].Type.Elem // always uint8?
+			t.Fields = nil
+		}
+		if len(t.name) >= 9 && t.name[:9] == "struct []" ||
+			len(t.name) >= 2 && t.name[:2] == "[]" {
+			t.Kind = KindSlice
+			t.Elem = t.Fields[0].Type.Elem
+			t.Fields = nil
+		}
+	}
+
+	// Copy info from base types into typedefs.
 	r = d.Reader()
 	for e, err := r.Next(); e != nil && err == nil; e, err = r.Next() {
 		if e.Tag != dwarf.TagTypedef {
@@ -67,21 +106,25 @@ func (p *Program) readDWARFTypes() {
 		t := p.dwarfMap[dt]
 		bt := p.dwarfMap[base]
 
-		// Copy type layout from base.
-		t.ptrs = bt.ptrs
+		// Copy type info from base. Everything except the name.
+		t.Kind = bt.Kind
+		t.Elem = bt.Elem
+		t.Fields = bt.Fields
 
 		// Detect some special types. If the base is some particular type,
 		// then the alias gets marked as special.
 		// We have aliases like:
 		//   interface {}              -> struct runtime.eface
 		//   error                     -> struct runtime.iface
-		//   runtime.stringStructDWARF -> struct runtime.stringStructDWARF
 		// Note: the base itself does not get marked as special.
-		if base.String() == "struct runtime.eface" {
-			t.isEface = true
+		// (Unlike strings and slices, where they do.)
+		if bt.name == "runtime.eface" {
+			t.Kind = KindEface
+			t.Fields = nil
 		}
-		if base.String() == "struct runtime.iface" {
-			t.isIface = true
+		if bt.name == "runtime.iface" {
+			t.Kind = KindIface
+			t.Fields = nil
 		}
 	}
 }
@@ -183,57 +226,6 @@ func runtimeName(dt dwarf.Type) string {
 	}
 }
 
-func dwarfPtrBits(dt dwarf.Type, ptrSize int64) []bool {
-	size := dt.Size()
-	if size < 0 { // For weird types, like <unspecified>
-		return nil
-	}
-	size /= ptrSize
-	if size > 10000 {
-		// TODO: fix this
-		return nil
-	}
-	b := make([]bool, size)
-	dwarfPtrBits1(dt, ptrSize, b)
-	// Trim trailing false entries.
-	for len(b) > 0 && !b[len(b)-1] {
-		b = b[:len(b)-1]
-	}
-	return b
-}
-func dwarfPtrBits1(dt dwarf.Type, ptrSize int64, b []bool) {
-	switch x := dt.(type) {
-	case *dwarf.IntType, *dwarf.UintType, *dwarf.BoolType, *dwarf.FloatType, *dwarf.ComplexType:
-		// Nothing to do
-	case *dwarf.PtrType, *dwarf.FuncType:
-		b[0] = true
-	case *dwarf.ArrayType:
-		n := x.Type.Size()
-		if n%ptrSize != 0 { // can't have pointers
-			break
-		}
-		n /= ptrSize // convert to words
-		for i := int64(0); i < x.Count; i++ {
-			dwarfPtrBits1(x.Type, ptrSize, b)
-			b = b[n:]
-		}
-	case *dwarf.StructType:
-		for _, f := range x.Field {
-			if f.ByteOffset%ptrSize != 0 { // can't have pointers
-				continue
-			}
-			dwarfPtrBits1(f.Type, ptrSize, b[f.ByteOffset/ptrSize:])
-		}
-	case *dwarf.TypedefType:
-		dwarfPtrBits1(x.Type, ptrSize, b)
-	default:
-		panic(fmt.Sprintf("unknown type %T\n", dt))
-	}
-	// VoidType is always hidden under a pointer.
-	// TODO: I think map, chan are just PtrType.
-	// TODO: string, interface, slice are structs and should just work.
-}
-
 // typeHeap tries to label all the heap objects with types.
 func (p *Program) typeHeap() {
 	// Set of objects which still need to be scanned.
@@ -248,7 +240,7 @@ func (p *Program) typeHeap() {
 		if t == nil {
 			return // TODO: why?
 		}
-		obj := p.findObject(a)
+		obj := p.FindObject(a)
 		if obj == nil { // pointer doesn't point to an object in the Go heap
 			return
 		}
@@ -271,9 +263,160 @@ func (p *Program) typeHeap() {
 		}
 	}
 
-	// Get types from globals.
+	// Get typings starting at roots.
+	for _, r := range p.roots {
+		p.typeObject(r.Addr, r.Type, p.proc, add)
+	}
+	fr := &frameReader{p: p}
+	for _, g := range p.goroutines {
+		for _, f := range g.frames {
+			fr.live = f.live
+			for _, r := range f.roots {
+				p.typeObject(r.Addr, r.Type, fr, add)
+			}
+		}
+	}
+
+	// Propagate typings through the object graph.
+	for len(q) > 0 {
+		obj := q[len(q)-1]
+		q = q[:len(q)-1]
+		for i := int64(0); i < obj.Repeat; i++ {
+			p.typeObject(obj.Addr.Add(i*obj.Type.Size()), obj.Type, p.proc, add)
+		}
+	}
+}
+
+type reader interface {
+	ReadAddress(core.Address) core.Address
+	ReadInt(core.Address) int64
+}
+
+type frameReader struct {
+	p    *Program
+	live map[core.Address]bool
+}
+
+func (fr *frameReader) ReadAddress(a core.Address) core.Address {
+	if !fr.live[a] {
+		return 0
+	}
+	return fr.p.proc.ReadAddress(a)
+}
+func (fr *frameReader) ReadInt(a core.Address) int64 {
+	return fr.p.proc.ReadInt(a)
+}
+
+// typeObject takes an address and a type for the data at that address.
+// For each pointer it finds in the memory at that address, it calls add with the pointer
+// and the type + repeat count of the thing that it points to.
+func (p *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Address, *Type, int64)) {
+	ptrSize := p.proc.PtrSize()
+
+	switch t.Kind {
+	case KindBool, KindInt, KindUint, KindFloat, KindComplex:
+		// Nothing to do
+	case KindEface, KindIface:
+		// interface. Use the type word to determine the type
+		// of the pointed-to object.
+		typ := r.ReadAddress(a)
+		if typ == 0 { // nil interface
+			return
+		}
+		ptr := r.ReadAddress(a.Add(ptrSize))
+		if t.Kind == KindIface {
+			if ptr < p.arenaStart {
+				// TODO: some types stored in the _type field of a static itab
+				// aren't in the list of runtime types?
+				return
+			}
+			typ = p.proc.ReadAddress(typ.Add(p.rtStructs["runtime.itab"].fields["_type"].off))
+		}
+		// TODO: for KindEface, type the typ pointer.
+
+		direct := p.proc.ReadUint8(typ.Add(p.rtStructs["runtime._type"].fields["kind"].off))&uint8(p.info.Constants["kindDirectIface"]) != 0
+		dt := p.runtimeMap[typ]
+		if direct {
+			if dt.Kind != KindPtr {
+				panic("direct type isn't a pointer")
+			}
+			dt = dt.Elem
+		}
+		add(ptr, dt, 1)
+	case KindString:
+		ptr := r.ReadAddress(a)
+		len := r.ReadInt(a.Add(ptrSize))
+		add(ptr, t.Elem, len)
+	case KindSlice:
+		ptr := r.ReadAddress(a)
+		cap := r.ReadInt(a.Add(2 * ptrSize))
+		add(ptr, t.Elem, cap)
+	case KindPtr:
+		if t.Elem != nil {
+			add(r.ReadAddress(a), t.Elem, 1)
+		}
+	case KindFunc:
+		// The referent is a closure. We don't know much about the
+		// type of the referent. Its first entry is a code pointer.
+		// The runtime._type we want exists in the binary (for all
+		// heap-allocated closures, anyway) but it would be hard to find
+		// just given the pc.
+		closure := r.ReadAddress(a)
+		if closure == 0 {
+			break
+		}
+		pc := p.proc.ReadAddress(closure)
+		f := p.funcTab.find(pc)
+		if f == nil {
+			panic(fmt.Sprintf("can't find func for closure pc %x", pc))
+		}
+		ft := f.closure
+		if ft == nil {
+			ft = &Type{name: "closure for " + f.name, size: ptrSize, Kind: KindPtr}
+			p.types = append(p.types, ft)
+			// For now, treat a closure like an unsafe.Pointer.
+			// TODO: better value for size?
+			f.closure = ft
+		}
+		p.typeObject(closure, ft, r, add)
+	case KindArray:
+		n := t.Elem.size
+		for i := int64(0); i < t.Count; i++ {
+			p.typeObject(a.Add(i*n), t.Elem, r, add)
+		}
+	case KindStruct:
+		for _, f := range t.Fields {
+			p.typeObject(a.Add(f.Off), f.Type, r, add)
+		}
+	default:
+		panic(fmt.Sprintf("unknown type kind %s\n", t.Kind))
+	}
+}
+
+// findRuntimeInfo uses DWARF information to find all the struct sizes,
+// field offsets, and field types for runtime data structures.
+// It populates p.rtStructs.
+func (p *Program) findRuntimeInfo() {
+	p.rtStructs = map[string]structInfo{}
+	for dt, _ := range p.dwarfMap {
+		rtname := runtimeName(dt)
+		if !strings.HasPrefix(rtname, "runtime.") {
+			continue
+		}
+		x, ok := dt.(*dwarf.StructType)
+		if !ok {
+			continue
+		}
+		s := structInfo{size: dt.Size(), fields: map[string]fieldInfo{}}
+		for _, f := range x.Field {
+			s.fields[f.Name] = fieldInfo{off: f.ByteOffset, typ: runtimeName(f.Type)}
+		}
+		p.rtStructs[rtname] = s
+	}
+}
+
+func (p *Program) findRoots() {
 	const (
-		// Constants that maybe should go in debug/dwarf
 		DW_OP_addr           = 0x03
 		DW_OP_call_frame_cfa = 0x9c
 		DW_OP_plus           = 0x22
@@ -296,7 +439,9 @@ func (p *Program) typeHeap() {
 			a = core.Address(p.proc.ByteOrder().Uint32(loc[1:]))
 		}
 		if !p.proc.Writeable(a) {
-			continue // Read-only globals can't have heap pointers.
+			// Read-only globals can't have heap pointers.
+			// TODO: keep roots around anyway?
+			continue
 		}
 		dt, err := d.Type(e.AttrField(dwarf.AttrType).Val.(dwarf.Offset))
 		if err != nil {
@@ -305,13 +450,23 @@ func (p *Program) typeHeap() {
 		if _, ok := dt.(*dwarf.UnspecifiedType); ok {
 			continue // Ignore markers like data/edata.
 		}
-		t := p.dwarfMap[dt]
-		p.typeObject(a, t, p.proc, add)
+		p.roots = append(p.roots, Root{
+			Name: e.AttrField(dwarf.AttrName).Val.(string),
+			Addr: a,
+			Type: p.dwarfMap[dt],
+			Live: nil,
+		})
 	}
 
 	// Find all stack variables.
-	r = d.Reader()
+	type Var struct {
+		name string
+		off  int64
+		typ  *Type
+	}
+	vars := map[*Func][]Var{}
 	var curfn *Func
+	r = d.Reader()
 	for e, err := r.Next(); e != nil && err == nil; e, err = r.Next() {
 		if e.Tag == dwarf.TagSubprogram {
 			min := core.Address(e.AttrField(dwarf.AttrLowpc).Val.(uint64))
@@ -369,192 +524,25 @@ func (p *Program) typeHeap() {
 		if err != nil {
 			panic(err)
 		}
-		// TODO: keep name around?
-		curfn.vars = append(curfn.vars, stackVar{off: off, t: p.dwarfMap[dt]})
+		name := e.AttrField(dwarf.AttrName).Val.(string)
+		vars[curfn] = append(vars[curfn], Var{name: name, off: off, typ: p.dwarfMap[dt]})
 	}
 
-	// Get types from goroutines.
+	// Get roots from goroutine stacks
 	for _, g := range p.goroutines {
 		for _, f := range g.frames {
-			r := &frameReader{proc: p.proc, f: f}
-			for _, v := range f.f.vars {
-				p.typeObject(f.max.Add(v.off), v.t, r, add)
+			for _, v := range vars[f.f] {
+				f.roots = append(f.roots, Root{
+					Name: v.name,
+					Addr: f.max.Add(v.off),
+					Type: v.typ,
+					Live: f.live,
+				})
 			}
-		}
-	}
 
-	// TODO: finalizers?
-	// TODO: specials?
-
-	// Propagate typings through the object graph.
-	for len(q) > 0 {
-		obj := q[len(q)-1]
-		q = q[:len(q)-1]
-		p.typeObject(obj.Addr, obj.Type, p.proc, add)
-	}
-}
-
-type reader interface {
-	ReadAddress(core.Address) core.Address
-	ReadInt(core.Address) int64
-}
-
-// A frameReader is an overlay on a core.Process which
-// makes all dead pointers in the frame read as nil.
-type frameReader struct {
-	proc *core.Process
-	f    *Frame
-}
-
-func (r *frameReader) ReadInt(a core.Address) int64 {
-	return r.proc.ReadInt(a)
-}
-func (r *frameReader) ReadAddress(a core.Address) core.Address {
-	live := false
-	// TODO: use binary search?
-	for _, p := range r.f.ptrs {
-		if p == a {
-			live = true
-			break
 		}
-
 	}
-	if !live {
-		return 0
-	}
-	return r.proc.ReadAddress(a)
-}
-
-// typeObject takes an address and a type for the data at that address.
-// For each pointer it finds in the memory at that address, it calls add with the pointer
-// and the type + repeat count of the thing it points to.
-func (p *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Address, *Type, int64)) {
-	// Short-cut return when there can't be any pointers.
-	// This is just an optimization.
-	ptrSize := p.proc.PtrSize()
-	if a.Align(ptrSize) != a { // not pointer-aligned
-		return
-	}
-	if t.size&(ptrSize-1) != 0 { // not multiple-of-pointer-sized
-		return
-	}
-
-	if t.dt == nil {
-		// All we know is ptr/nonptr for this type. Give up here.
-		return
-	}
-
-	// Special cases for interface types.
-	if t.isEface {
-		// interface{}. Use the type word to determine the type
-		// of the pointed-to object.
-		typ := r.ReadAddress(a)
-		if typ == 0 { // nil interface
-			return
-		}
-		ptr := r.ReadAddress(a.Add(ptrSize))
-		add(ptr, p.runtimeMap[typ], 1)
-		return
-	}
-	if t.isIface {
-		// interface{foo()}. Use the itab to determine the type
-		// of the pointed-to object.
-		itab := r.ReadAddress(a)
-		if itab == 0 { // nil interface
-			return
-		}
-		ptr := r.ReadAddress(a.Add(ptrSize))
-		typ := r.ReadAddress(itab.Add(p.rtStructs["runtime.itab"].fields["_type"].off))
-		add(ptr, p.runtimeMap[typ], 1)
-		return
-	}
-	// Special cases for references to repeated objects.
-	if t.isString {
-		ptr := r.ReadAddress(a)
-		len := r.ReadInt(a.Add(ptrSize))
-		pt := t.dt.(*dwarf.StructType).Field[0].Type // always *uint8
-		et := pt.(*dwarf.PtrType).Type
-		add(ptr, p.dwarfMap[et], len)
-		return
-	}
-	if t.isSlice {
-		ptr := r.ReadAddress(a)
-		cap := r.ReadInt(a.Add(2 * ptrSize))
-		pt := t.dt.(*dwarf.StructType).Field[0].Type
-		et := pt.(*dwarf.PtrType).Type
-		add(ptr, p.dwarfMap[et], cap)
-		return
-	}
-
-	switch x := t.dt.(type) {
-	case *dwarf.IntType, *dwarf.UintType, *dwarf.BoolType, *dwarf.FloatType, *dwarf.ComplexType:
-		// Nothing to do
-	case *dwarf.PtrType:
-		if _, ok := x.Type.(*dwarf.VoidType); ok {
-			// unsafe.Pointer. We don't know anything about the target object's type.
-			break
-		}
-		add(r.ReadAddress(a), p.dwarfMap[x.Type], 1)
-	case *dwarf.FuncType:
-		// The referent is a closure. We don't know much about the
-		// type of the referent. Its first entry is a code pointer.
-		// The runtime._type we want exists in the binary (for all
-		// heap-allocated closures, anyway) but it would be hard to find
-		// just given the pc.
-		closure := r.ReadAddress(a)
-		if closure == 0 {
-			break
-		}
-		pc := r.ReadAddress(closure)
-		f := p.funcTab.find(pc)
-		if f == nil {
-			panic(fmt.Sprintf("can't find func for closure pc %x", pc))
-		}
-		ft := f.closure
-		if ft == nil {
-			ft = &Type{name: "closure for " + f.name, size: ptrSize}
-			// TODO: better value for size?
-			f.closure = ft
-			p.types = append(p.types, ft)
-		}
-		p.typeObject(closure, ft, r, add)
-	case *dwarf.ArrayType:
-		et := p.dwarfMap[x.Type]
-		n := et.size
-		for i := int64(0); i < x.Count; i++ {
-			p.typeObject(a.Add(i*n), et, r, add)
-		}
-	case *dwarf.StructType:
-		for _, f := range x.Field {
-			p.typeObject(a.Add(f.ByteOffset), p.dwarfMap[f.Type], r, add)
-		}
-	case *dwarf.TypedefType:
-		p.typeObject(a, p.dwarfMap[x.Type], r, add)
-	default:
-		panic(fmt.Sprintf("unknown type %T\n", t.dt))
-	}
-}
-
-// findRuntimeInfo uses DWARF information to find all the struct sizes,
-// field offsets, and field types for runtime data structures.
-// It populates p.rtStructs.
-func (p *Program) findRuntimeInfo() {
-	p.rtStructs = map[string]structInfo{}
-	for dt, _ := range p.dwarfMap {
-		rtname := runtimeName(dt)
-		if !strings.HasPrefix(rtname, "runtime.") {
-			continue
-		}
-		x, ok := dt.(*dwarf.StructType)
-		if !ok {
-			continue
-		}
-		s := structInfo{size: dt.Size(), fields: map[string]fieldInfo{}}
-		for _, f := range x.Field {
-			s.fields[f.Name] = fieldInfo{off: f.ByteOffset, typ: runtimeName(f.Type)}
-		}
-		p.rtStructs[rtname] = s
-	}
+	// TODO: finalizers, defers
 }
 
 /* Dwarf encoding notes
