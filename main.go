@@ -105,11 +105,11 @@ func main() {
 	alloc := c.Stats().Child("heap").Child("in use spans").Child("alloc")
 	alloc.Children = []*gocore.Stats{
 		&gocore.Stats{"live", total, nil},
-		&gocore.Stats{"garbage", alloc.Val - total, nil},
+		&gocore.Stats{"garbage", alloc.Size - total, nil},
 	}
 
 	tw := tabwriter.NewWriter(os.Stdout, 0, 8, 1, ' ', tabwriter.AlignRight)
-	all := c.Stats().Val
+	all := c.Stats().Size
 	var printStat func(*gocore.Stats, string)
 	printStat = func(s *gocore.Stats, indent string) {
 		comment := ""
@@ -119,7 +119,7 @@ func main() {
 		case "manual spans":
 			comment = "(Go stacks)"
 		}
-		fmt.Fprintf(tw, "%s\t%d\t%6.2f%%\t %s\n", fmt.Sprintf("%-20s", indent+s.Name), s.Val, float64(s.Val)*100/float64(all), comment)
+		fmt.Fprintf(tw, "%s\t%d\t%6.2f%%\t %s\n", fmt.Sprintf("%-20s", indent+s.Name), s.Size, float64(s.Size)*100/float64(all), comment)
 		for _, c := range s.Children {
 			printStat(c, indent+"  ")
 		}

@@ -21,7 +21,11 @@ func (p *Program) readDWARFTypes() {
 			if err != nil {
 				continue
 			}
-			t := &Type{name: gocoreName(dt), size: dt.Size()}
+			size := dt.Size()
+			if size < 0 { // Fix for issue 21097.
+				size = dwarfSize(dt, p.proc.PtrSize())
+			}
+			t := &Type{name: gocoreName(dt), size: size}
 			p.types = append(p.types, t)
 			p.dwarfMap[dt] = t
 		}
@@ -107,9 +111,9 @@ func (p *Program) readDWARFTypes() {
 		bt := p.dwarfMap[base]
 
 		// Copy type info from base. Everything except the name.
-		t.Kind = bt.Kind
-		t.Elem = bt.Elem
-		t.Fields = bt.Fields
+		name := t.name
+		*t = *bt
+		t.name = name
 
 		// Detect some special types. If the base is some particular type,
 		// then the alias gets marked as special.
@@ -126,6 +130,22 @@ func (p *Program) readDWARFTypes() {
 			t.Kind = KindIface
 			t.Fields = nil
 		}
+	}
+}
+
+// dwarfSize is used to compute the size of a DWARF type when .Size()
+// is clearly wrong (returns a size < 0).
+// This function implements just enough to correct the bad behavior in issue21097.
+func dwarfSize(dt dwarf.Type, ptrSize int64) int64 {
+	switch x := dt.(type) {
+	case *dwarf.FuncType:
+		return ptrSize // This is the fix.
+	case *dwarf.ArrayType:
+		return x.Count * dwarfSize(x.Type, ptrSize)
+	case *dwarf.TypedefType:
+		return dwarfSize(x.Type, ptrSize)
+	default:
+		panic("unhandled")
 	}
 }
 
@@ -325,20 +345,30 @@ func (p *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		}
 		ptr := r.ReadAddress(a.Add(ptrSize))
 		if t.Kind == KindIface {
-			if ptr < p.arenaStart {
-				// TODO: some types stored in the _type field of a static itab
-				// aren't in the list of runtime types?
-				return
-			}
 			typ = p.proc.ReadAddress(typ.Add(p.rtStructs["runtime.itab"].fields["_type"].off))
 		}
-		// TODO: for KindEface, type the typ pointer.
+		// TODO: for KindEface, type the typ pointer. It might point to the heap
+		// if the type was allocated with reflect.
 
 		direct := p.proc.ReadUint8(typ.Add(p.rtStructs["runtime._type"].fields["kind"].off))&uint8(p.info.Constants["kindDirectIface"]) != 0
-		dt := p.runtimeMap[typ]
+		dt := p.runtimeType2Type(typ)
 		if direct {
+			// Find the base type of the pointer held in the interface.
+		findptr:
+			if dt.Kind == KindArray {
+				dt = dt.Elem
+				goto findptr
+			}
+			if dt.Kind == KindStruct {
+				for _, f := range dt.Fields {
+					if f.Type.Size() != 0 {
+						dt = f.Type
+						goto findptr
+					}
+				}
+			}
 			if dt.Kind != KindPtr {
-				panic("direct type isn't a pointer")
+				panic(fmt.Sprintf("direct type isn't a pointer %s", dt.Kind))
 			}
 			dt = dt.Elem
 		}

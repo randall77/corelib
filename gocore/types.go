@@ -34,11 +34,15 @@ type Program struct {
 	// list of types
 	types []*Type
 
+	// map from dwarf type to *Type
+	dwarfMap map[dwarf.Type]*Type
+
 	// map from address of runtime._type to *Type
 	runtimeMap map[core.Address]*Type
 
-	// map from dwarf type to *Type
-	dwarfMap map[dwarf.Type]*Type
+	// map from runtime type name to the set of *Type with that name
+	// Used to find candidates to put in the runtimeMap map.
+	runtimeNameMap map[string][]*Type
 
 	// All live objects in the heap.
 	objects []Object
@@ -215,7 +219,8 @@ func (t *Type) Size() int64 {
 }
 
 type module struct {
-	r region // inferior region holding a runtime.moduledata
+	r             region       // inferior region holding a runtime.moduledata
+	types, etypes core.Address // range that holds all the runtime._type data in this module
 }
 
 type Func struct {
@@ -250,9 +255,12 @@ type span struct {
 	size int64 // size of objects in span
 }
 
+// A Stats struct is the node of a tree representing the entire memory
+// usage of the Go program. Children of a node break its usage down
+// by category.
 type Stats struct {
 	Name     string
-	Val      int64
+	Size     int64
 	Children []*Stats
 }
 

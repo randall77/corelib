@@ -251,10 +251,10 @@ func (p *Program) readSpans() {
 		}
 		var sum int64
 		for _, c := range s.Children {
-			sum += c.Val
+			sum += c.Size
 		}
-		if sum != s.Val {
-			panic(fmt.Sprintf("check failed for %s: %d vs %d", s.Name, s.Val, sum))
+		if sum != s.Size {
+			panic(fmt.Sprintf("check failed for %s: %d vs %d", s.Name, s.Size, sum))
 		}
 	}
 	check(p.stats)
@@ -267,26 +267,27 @@ func (p *Program) readSpans() {
 
 func (p *Program) readModules() {
 	// Make a runtime name -> Type map for existing DWARF types.
-	dwarf := map[string][]*Type{}
+	p.runtimeNameMap = map[string][]*Type{}
 	for dt, t := range p.dwarfMap {
 		name := runtimeName(dt)
-		dwarf[name] = append(dwarf[name], t)
+		p.runtimeNameMap[name] = append(p.runtimeNameMap[name], t)
 	}
 
 	ms := p.runtime["modulesSlice"].Deref()
 	n := ms.SliceLen()
 	for i := int64(0); i < n; i++ {
 		md := ms.SliceIndex(i).Deref()
-		p.modules = append(p.modules, p.readModule(md, dwarf))
+		p.modules = append(p.modules, p.readModule(md))
 	}
 }
 
-func (p *Program) readModule(r region, dwarf map[string][]*Type) *module {
+func (p *Program) readModule(r region) *module {
 	m := &module{r: r}
-	pcln := r.Field("pclntable")
-	ptrSize := p.proc.PtrSize()
+	m.types = core.Address(r.Field("types").Uintptr())
+	m.etypes = core.Address(r.Field("etypes").Uintptr())
 
 	// Read the pc->function table
+	pcln := r.Field("pclntable")
 	ftab := r.Field("ftab")
 	n := ftab.SliceLen() - 1 // last slot is a dummy, just holds entry
 	for i := int64(0); i < n; i++ {
@@ -301,85 +302,6 @@ func (p *Program) readModule(r region, dwarf map[string][]*Type) *module {
 		p.funcTab.add(min, max, f)
 	}
 
-	// Types to use for ptr/nonptr fields of runtime types which
-	// have no corresponding DWARF type.
-	ptr := dwarf["unsafe.Pointer"][0]
-	nonptr := dwarf["uintptr"][0]
-	if ptr == nil || nonptr == nil {
-		panic("ptr / nonptr standins missing")
-	}
-
-	// Read the types in this module.
-	types := core.Address(r.Field("types").Uintptr())
-	typelinks := r.Field("typelinks")
-	ntypelinks := typelinks.SliceLen()
-	for i := int64(0); i < ntypelinks; i++ {
-		off := typelinks.SliceIndex(i).Int32()
-		r := region{p: p, a: types.Add(int64(off)), typ: "runtime._type"}
-		size := int64(r.Field("size").Uintptr())
-		x := types.Add(int64(r.Field("str").Cast("int32").Int32()))
-		n := uint16(p.proc.ReadUint8(x.Add(1)))<<8 + uint16(p.proc.ReadUint8(x.Add(2)))
-		b := make([]byte, n)
-		p.proc.ReadAt(b, x.Add(3))
-		name := string(b)
-		if r.Field("tflag").Cast("uint8").Uint8()&uint8(p.info.Constants["tflagExtraStar"]) != 0 {
-			name = name[1:]
-		}
-		// Read ptr/nonptr bits
-		nptrs := int64(r.Field("ptrdata").Uintptr()) / ptrSize
-		var ptrs []int64
-		if r.Field("kind").Uint8()&uint8(p.info.Constants["kindGCProg"]) == 0 {
-			gcdata := r.Field("gcdata").Address()
-			for i := int64(0); i < nptrs; i++ {
-				if p.proc.ReadUint8(gcdata.Add(i/8))>>uint(i%8)&1 != 0 {
-					ptrs = append(ptrs, i*ptrSize)
-				}
-			}
-		} else {
-			// TODO: run GC program to get ptr indexes
-		}
-
-		// Find a Type that matches this type.
-		// (The matched type will be one constructed from DWARF info.)
-		// It must match name, size, and pointer bits.
-		var candidates []*Type
-		for _, t := range dwarf[name] {
-			if size == t.size && equal(ptrs, t.ptrs()) {
-				candidates = append(candidates, t)
-			}
-		}
-		var t *Type
-		if len(candidates) > 0 {
-			// If a runtime type matches more than one DWARF type,
-			// pick one arbitrarily.
-			// This looks mostly harmless. DWARF has some redundant entries.
-			// For example, [32]uint8 appears twice.
-			// TODO: investigate the reason for this duplication.
-			t = candidates[0]
-		} else {
-			// There's no corresponding DWARF type.  Make our own.
-			t = &Type{name: name, size: size, Kind: KindStruct}
-			p.types = append(p.types, t)
-			n := t.size / ptrSize
-			for i := int64(0); i < n; i++ {
-				typ := nonptr
-				if len(ptrs) > 0 && ptrs[0] == i*ptrSize {
-					typ = ptr
-					ptrs = ptrs[1:]
-				}
-				t.Fields = append(t.Fields, Field{
-					Name: fmt.Sprintf("f%d", i),
-					Off:  i * ptrSize,
-					Type: typ,
-				})
-
-			}
-			if t.size%ptrSize != 0 {
-				// TODO: tail of <ptrSize data.
-			}
-		}
-		p.runtimeMap[r.a] = t
-	}
 	return m
 }
 
@@ -422,6 +344,113 @@ func (t *Type) ptrs1(s []int64, off int64) []int64 {
 		// no pointers
 	}
 	return s
+}
+
+// Convert the address of a runtime._type to a *Type.
+// Guaranteed to return a non-nil *Type.
+func (p *Program) runtimeType2Type(a core.Address) *Type {
+	if t, ok := p.runtimeMap[a]; ok {
+		return t
+	}
+	ptrSize := p.proc.PtrSize()
+
+	// Read runtime._type.size
+	r := region{p: p, a: a, typ: "runtime._type"}
+	size := int64(r.Field("size").Uintptr())
+
+	// Find module this type is in.
+	var m *module
+	for _, x := range p.modules {
+		if x.types <= a && a < x.etypes {
+			m = x
+			break
+		}
+	}
+
+	// Read information out of the runtime._type.
+	var name string
+	if m != nil {
+		x := m.types.Add(int64(r.Field("str").Cast("int32").Int32()))
+		n := uint16(p.proc.ReadUint8(x.Add(1)))<<8 + uint16(p.proc.ReadUint8(x.Add(2)))
+		b := make([]byte, n)
+		p.proc.ReadAt(b, x.Add(3))
+		name = string(b)
+	} else {
+		// A reflect-generated type.
+		// TODO: The actual name is in the runtime.reflectOffs map.
+		// Too hard to look things up in maps here, just allocate a placeholder for now.
+		name = fmt.Sprintf("reflect.generated%x", a)
+	}
+	if r.Field("tflag").Cast("uint8").Uint8()&uint8(p.info.Constants["tflagExtraStar"]) != 0 {
+		name = name[1:]
+	}
+
+	// Read ptr/nonptr bits
+	nptrs := int64(r.Field("ptrdata").Uintptr()) / ptrSize
+	var ptrs []int64
+	if r.Field("kind").Uint8()&uint8(p.info.Constants["kindGCProg"]) == 0 {
+		gcdata := r.Field("gcdata").Address()
+		for i := int64(0); i < nptrs; i++ {
+			if p.proc.ReadUint8(gcdata.Add(i/8))>>uint(i%8)&1 != 0 {
+				ptrs = append(ptrs, i*ptrSize)
+			}
+		}
+	} else {
+		// TODO: run GC program to get ptr indexes
+	}
+
+	// Find a Type that matches this type.
+	// (The matched type will be one constructed from DWARF info.)
+	// It must match name, size, and pointer bits.
+	var candidates []*Type
+	for _, t := range p.runtimeNameMap[name] {
+		if size == t.size && equal(ptrs, t.ptrs()) {
+			candidates = append(candidates, t)
+		}
+	}
+	var t *Type
+	if len(candidates) > 0 {
+		// If a runtime type matches more than one DWARF type,
+		// pick one arbitrarily.
+		// This looks mostly harmless. DWARF has some redundant entries.
+		// For example, [32]uint8 appears twice.
+		// TODO: investigate the reason for this duplication.
+		t = candidates[0]
+	} else {
+		// There's no corresponding DWARF type.  Make our own.
+		t = &Type{name: name, size: size, Kind: KindStruct}
+		p.types = append(p.types, t)
+		n := t.size / ptrSize
+
+		// Types to use for ptr/nonptr fields of runtime types which
+		// have no corresponding DWARF type.
+		ptr := p.runtimeNameMap["unsafe.Pointer"][0]
+		nonptr := p.runtimeNameMap["uintptr"][0]
+		if ptr == nil || nonptr == nil {
+			panic("ptr / nonptr standins missing")
+		}
+
+		for i := int64(0); i < n; i++ {
+			typ := nonptr
+			if len(ptrs) > 0 && ptrs[0] == i*ptrSize {
+				typ = ptr
+				ptrs = ptrs[1:]
+			}
+			t.Fields = append(t.Fields, Field{
+				Name: fmt.Sprintf("f%d", i),
+				Off:  i * ptrSize,
+				Type: typ,
+			})
+
+		}
+		if t.size%ptrSize != 0 {
+			// TODO: tail of <ptrSize data.
+		}
+	}
+	// Memoize.
+	p.runtimeMap[a] = t
+
+	return t
 }
 
 // readFunc parses a runtime._func and returns a *Func.

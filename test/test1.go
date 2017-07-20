@@ -44,3 +44,20 @@ func main() {
 
 	_ = a[0].sum()
 }
+
+// See issue 21094. Introduce a bad sudog type to make sure we don't barf on it.
+var c chan string
+
+func init() {
+	c = nil // keep global c alive.
+}
+
+// See issue 21097. Introduce some bad func types to make sure we don't barf on them.
+
+var t1 func()
+var t2 [4]func()
+
+func init() {
+	t1 = nil
+	t2[0] = nil
+}
