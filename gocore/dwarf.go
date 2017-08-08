@@ -350,7 +350,7 @@ func (p *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		// TODO: for KindEface, type the typ pointer. It might point to the heap
 		// if the type was allocated with reflect.
 
-		direct := p.proc.ReadUint8(typ.Add(p.rtStructs["runtime._type"].fields["kind"].off))&uint8(p.info.Constants["kindDirectIface"]) != 0
+		direct := p.proc.ReadUint8(typ.Add(p.rtStructs["runtime._type"].fields["kind"].off))&uint8(p.rtConstants["kindDirectIface"]) != 0
 		dt := p.runtimeType2Type(typ)
 		if direct {
 			// Find the base type of the pointer held in the interface.
@@ -382,7 +382,7 @@ func (p *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		cap := r.ReadInt(a.Add(2 * ptrSize))
 		add(ptr, t.Elem, cap)
 	case KindPtr:
-		if t.Elem != nil {
+		if t.Elem != nil { // unsafe.Pointer has a nil Elem field.
 			add(r.ReadAddress(a), t.Elem, 1)
 		}
 	case KindFunc:
@@ -425,7 +425,8 @@ func (p *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 
 // findRuntimeInfo uses DWARF information to find all the struct sizes,
 // field offsets, and field types for runtime data structures.
-// It populates p.rtStructs.
+// It also finds a useful set of runtime constants.
+// It populates p.rtStructs and rtConstants.
 func (p *Program) findRuntimeInfo() {
 	p.rtStructs = map[string]structInfo{}
 	for dt, _ := range p.dwarfMap {
@@ -443,6 +444,30 @@ func (p *Program) findRuntimeInfo() {
 		}
 		p.rtStructs[rtname] = s
 	}
+	p.rtConstants = map[string]int64{}
+	// TODO: It would be ideal if we could glean this info from DWARF.
+	// But we don't package up constants in DWARF right now. See issue #14517.
+	// For now, we'll hard code them. As we get more Go versions, each entry
+	// might need to condition on Go version, and maybe arch.
+	m := p.rtConstants
+	m["_MSpanDead"] = 0
+	m["_MSpanInUse"] = 1
+	m["_MSpanManual"] = 2
+	m["_MSpanFree"] = 3
+	m["_Gidle"] = 0
+	m["_Grunnable"] = 1
+	m["_Grunning"] = 2
+	m["_Gsyscall"] = 3
+	m["_Gwaiting"] = 4
+	m["_Gdead"] = 6
+	m["_Gscan"] = 0x1000
+	m["_PCDATA_StackMapIndex"] = 0
+	m["_FUNCDATA_LocalsPointerMaps"] = 1
+	m["_FUNCDATA_ArgsPointerMaps"] = 0
+	m["tflagExtraStar"] = 1 << 1
+	m["kindGCProg"] = 1 << 6
+	m["kindDirectIface"] = 1 << 5
+	m["PageSize"] = 1 << 13
 }
 
 func (p *Program) findRoots() {

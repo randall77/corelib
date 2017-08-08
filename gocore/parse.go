@@ -6,7 +6,6 @@ import (
 	"sort"
 
 	"github.com/randall77/corelib/core"
-	"github.com/randall77/corelib/rtinfo"
 )
 
 // Core takes a loaded core file and extracts Go information from it.
@@ -68,14 +67,6 @@ func Core(proc *core.Process) (p *Program, err error) {
 
 	p.readDWARFTypes()
 	p.findRuntimeInfo()
-
-	// Find information about runtime data structures.
-	// TODO: Not known yet: how to use dwarf info to find runtime constants.
-	p.info = rtinfo.Find(proc.Arch(), p.buildVersion)
-	if p.info.Constants == nil {
-		return nil, fmt.Errorf("no runtime info for %s:%s", proc.Arch(), p.buildVersion)
-	}
-
 	p.readModules()
 	p.readSpans()
 	p.readMs()
@@ -157,13 +148,13 @@ func (p *Program) readSpans() {
 			panic("weird mapping " + m.Perm().String())
 		}
 	}
-	pageSize := p.info.Constants["_PageSize"]
+	pageSize := p.rtConstants["_PageSize"]
 
 	// Span types
-	spanInUse := uint8(p.info.Constants["_MSpanInUse"])
-	spanManual := uint8(p.info.Constants["_MSpanManual"])
-	spanDead := uint8(p.info.Constants["_MSpanDead"])
-	spanFree := uint8(p.info.Constants["_MSpanFree"])
+	spanInUse := uint8(p.rtConstants["_MSpanInUse"])
+	spanManual := uint8(p.rtConstants["_MSpanManual"])
+	spanDead := uint8(p.rtConstants["_MSpanDead"])
+	spanFree := uint8(p.rtConstants["_MSpanFree"])
 
 	// Process spans.
 	allspans := mheap.Field("allspans")
@@ -381,14 +372,14 @@ func (p *Program) runtimeType2Type(a core.Address) *Type {
 		// Too hard to look things up in maps here, just allocate a placeholder for now.
 		name = fmt.Sprintf("reflect.generated%x", a)
 	}
-	if r.Field("tflag").Cast("uint8").Uint8()&uint8(p.info.Constants["tflagExtraStar"]) != 0 {
+	if r.Field("tflag").Cast("uint8").Uint8()&uint8(p.rtConstants["tflagExtraStar"]) != 0 {
 		name = name[1:]
 	}
 
 	// Read ptr/nonptr bits
 	nptrs := int64(r.Field("ptrdata").Uintptr()) / ptrSize
 	var ptrs []int64
-	if r.Field("kind").Uint8()&uint8(p.info.Constants["kindGCProg"]) == 0 {
+	if r.Field("kind").Uint8()&uint8(p.rtConstants["kindGCProg"]) == 0 {
 		gcdata := r.Field("gcdata").Address()
 		for i := int64(0); i < nptrs; i++ {
 			if p.proc.ReadUint8(gcdata.Add(i/8))>>uint(i%8)&1 != 0 {
@@ -477,7 +468,7 @@ func (m *module) readFunc(r region, pcln region) *Func {
 	}
 
 	// Read pcln tables we need.
-	if stackmap := int(r.p.info.Constants["_PCDATA_StackMapIndex"]); stackmap < len(f.pcdata) {
+	if stackmap := int(r.p.rtConstants["_PCDATA_StackMapIndex"]); stackmap < len(f.pcdata) {
 		f.stackMap.read(r.p.proc, pcln.SliceIndex(int64(f.pcdata[stackmap])).a)
 	}
 
@@ -557,30 +548,30 @@ func (p *Program) readG(r region) *Goroutine {
 		}
 	}
 	status := r.Field("atomicstatus").Uint32()
-	status &^= uint32(p.info.Constants["_Gscan"])
+	status &^= uint32(p.rtConstants["_Gscan"])
 	var sp, pc core.Address
 	switch {
-	case status == uint32(p.info.Constants["_Gidle"]):
+	case status == uint32(p.rtConstants["_Gidle"]):
 		return g
-	case status == uint32(p.info.Constants["_Grunnable"]):
+	case status == uint32(p.rtConstants["_Grunnable"]):
 		sched := r.Field("sched")
 		sp = core.Address(sched.Field("sp").Uintptr())
 		pc = core.Address(sched.Field("pc").Uintptr())
-	case status == uint32(p.info.Constants["_Grunning"]):
+	case status == uint32(p.rtConstants["_Grunning"]):
 		regs := osT.Regs()
 		// or 9? or 4?
 		sp = core.Address(regs[19]) // TODO: how are these offsets possibly right?
 		pc = core.Address(regs[11])
 		// TODO: back up to the calling frame?
-	case status == uint32(p.info.Constants["_Gsyscall"]):
+	case status == uint32(p.rtConstants["_Gsyscall"]):
 		sp = core.Address(r.Field("syscallsp").Uintptr())
 		pc = core.Address(r.Field("syscallpc").Uintptr())
 		// TODO: or should we use the osT registers?
-	case status == uint32(p.info.Constants["_Gwaiting"]):
+	case status == uint32(p.rtConstants["_Gwaiting"]):
 		sched := r.Field("sched")
 		sp = core.Address(sched.Field("sp").Uintptr())
 		pc = core.Address(sched.Field("pc").Uintptr())
-	case status == uint32(p.info.Constants["_Gdead"]):
+	case status == uint32(p.rtConstants["_Gdead"]):
 		return nil
 		// TODO: copystack, others?
 	}
@@ -632,7 +623,7 @@ func (p *Program) readFrame(sp, pc core.Address) *Frame {
 
 	// Find live ptrs in locals
 	live := map[core.Address]bool{}
-	if x := int(p.info.Constants["_FUNCDATA_LocalsPointerMaps"]); x < len(f.funcdata) {
+	if x := int(p.rtConstants["_FUNCDATA_LocalsPointerMaps"]); x < len(f.funcdata) {
 		locals := region{p: p, a: f.funcdata[x], typ: "runtime.stackmap"}
 		n := locals.Field("n").Int32()       // # of bitmaps
 		nbit := locals.Field("nbit").Int32() // # of bits per bitmap
@@ -652,7 +643,7 @@ func (p *Program) readFrame(sp, pc core.Address) *Frame {
 		}
 	}
 	// Same for args
-	if x := int(p.info.Constants["_FUNCDATA_ArgsPointerMaps"]); x < len(f.funcdata) {
+	if x := int(p.rtConstants["_FUNCDATA_ArgsPointerMaps"]); x < len(f.funcdata) {
 		args := region{p: p, a: f.funcdata[x], typ: "runtime.stackmap"}
 		n := args.Field("n").Int32()       // # of bitmaps
 		nbit := args.Field("nbit").Int32() // # of bits per bitmap

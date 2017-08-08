@@ -4,7 +4,6 @@ import (
 	"debug/dwarf"
 
 	"github.com/randall77/corelib/core"
-	"github.com/randall77/corelib/rtinfo"
 )
 
 type Program struct {
@@ -18,8 +17,8 @@ type Program struct {
 	goroutines []*Goroutine
 
 	// runtime info
-	rtStructs map[string]structInfo
-	info      rtinfo.Info
+	rtStructs   map[string]structInfo
+	rtConstants map[string]int64
 
 	// runtime globals
 	runtime map[string]region
@@ -72,6 +71,7 @@ func (p *Program) Stats() *Stats {
 	return p.stats
 }
 
+// BuildVersion returns the Go version that was used to build the inferior binary.
 func (p *Program) BuildVersion() string {
 	return p.buildVersion
 }
@@ -139,12 +139,13 @@ func (f *Frame) Roots() []Root {
 	return f.roots
 }
 
-// A root is an area of memory that might have pointers into the heap.
+// A Root is an area of memory that might have pointers into the heap.
 type Root struct {
 	Name string
 	Addr core.Address
 	Type *Type
-	Live map[core.Address]bool // if non-nil, the set of words in the root that are live
+	// Live, if non-nil, restricts the set of words in the root that are live.
+	Live map[core.Address]bool
 }
 
 // A Type is the representation of the type of a Go object.
@@ -197,6 +198,7 @@ func (k Kind) String() string {
 	}[k]
 }
 
+// A Field represents a single field of a struct type.
 type Field struct {
 	Name string
 	Off  int64
@@ -258,6 +260,8 @@ type span struct {
 // A Stats struct is the node of a tree representing the entire memory
 // usage of the Go program. Children of a node break its usage down
 // by category.
+// We maintain the invariant that, if there are children,
+// Size == sum(c.Size for c in Children).
 type Stats struct {
 	Name     string
 	Size     int64
