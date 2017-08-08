@@ -38,9 +38,11 @@ func main() {
 		} else {
 			perm += "-"
 		}
-		fmt.Fprintf(t, "%x\t%x\t%s\t%s@%x\t", m.Min(), m.Max(), perm, m.File(), m.Offset())
-		if m.OrigFile() != "" {
-			fmt.Fprintf(t, "%s@%x", m.OrigFile(), m.OrigOffset())
+		file, off := m.Source()
+		fmt.Fprintf(t, "%x\t%x\t%s\t%s@%x\t", m.Min(), m.Max(), perm, file, off)
+		if m.CopyOnWrite() {
+			file, off = m.OrigSource()
+			fmt.Fprintf(t, "%s@%x", file, off)
 		}
 		fmt.Fprintf(t, "\t\n")
 	}

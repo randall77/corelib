@@ -22,22 +22,25 @@ import (
 // An Address is a location in inferior's address space.
 type Address uint64
 
-// Subtract b from a. Requires a >= b.
+// Sub subtracts b from a. Requires a >= b.
 func (a Address) Sub(b Address) int64 {
 	return int64(a - b)
 }
 
-// Add x to address a.
+// Add adds x to address a.
 func (a Address) Add(x int64) Address {
 	return a + Address(x)
 }
 
+// Max returns the larger of a and b.
 func (a Address) Max(b Address) Address {
 	if a > b {
 		return a
 	}
 	return b
 }
+
+// Min returns the smaller of a and b.
 func (a Address) Min(b Address) Address {
 	if a < b {
 		return a
@@ -88,6 +91,7 @@ func (p *Process) Arch() string {
 	return p.arch
 }
 
+// PtrSize returns the size in bytes of a pointer in the inferior.
 func (p *Process) PtrSize() int64 {
 	return p.ptrSize
 }
@@ -144,33 +148,31 @@ func (m *Mapping) Perm() Perm {
 	return m.perm
 }
 
-// File returns the backing file for the mapping, or "" if none.
-func (m *Mapping) File() string {
+// Source returns the backing file and offset for the mapping, or "", 0 if none.
+func (m *Mapping) Source() (string, int64) {
 	if m.f == nil {
-		return ""
+		return "", 0
 	}
-	return m.f.Name()
+	return m.f.Name(), m.off
 }
 
-// Offset returns the offset in File() where the mapping starts.
-// Offset returns 0 if File() == "".
-func (m *Mapping) Offset() int64 {
-	return m.off
-}
-
+// CopyOnWrite reports whether the mapping is a copy-on-write region, i.e.
+// it started as a mapped file and is now writeable.
+// TODO: is this distinguishable from a write-back region?
 func (m *Mapping) CopyOnWrite() bool {
 	return m.origF != nil
 }
-func (m *Mapping) OrigFile() string {
+
+// For CopyOnWrite mappings, OrigSource returns the file/offset of the
+// original copy of the data, or "", 0 if none.
+func (m *Mapping) OrigSource() (string, int64) {
 	if m.origF == nil {
-		return ""
+		return "", 0
 	}
-	return m.origF.Name()
-}
-func (m *Mapping) OrigOffset() int64 {
-	return m.origOff
+	return m.origF.Name(), m.origOff
 }
 
+// A Thread represents an operating system thread.
 type Thread struct {
 	pid  uint64   // thread/process ID
 	regs []uint64 // set depends on arch
@@ -182,11 +184,13 @@ func (t *Thread) Pid() uint64 {
 
 // Regs returns the set of register values for the thread.
 // What registers go where is architecture-dependent.
+// TODO: document for each architecture.
 // TODO: do this in some arch-independent way?
 func (t *Thread) Regs() []uint64 {
 	return t.regs
 }
 
+// A Perm represents the permissions allowed for a Mapping.
 type Perm uint8
 
 const (

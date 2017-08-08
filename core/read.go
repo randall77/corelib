@@ -222,7 +222,7 @@ func (p *Process) readNTFile(f *os.File, e *elf.File, desc []byte) error {
 		backing, err := os.Open(name)
 		if err != nil {
 			// Can't find mapped file.
-			// TODO: if we debug on a different machine or something,
+			// TODO: if we debug on a different machine,
 			// provide a way to map from core's file spec to a real file.
 			return fmt.Errorf("can't open mapped file: %v\n", err)
 		}
