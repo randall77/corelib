@@ -467,7 +467,7 @@ func (p *Program) findRuntimeInfo() {
 	m["tflagExtraStar"] = 1 << 1
 	m["kindGCProg"] = 1 << 6
 	m["kindDirectIface"] = 1 << 5
-	m["PageSize"] = 1 << 13
+	m["_PageSize"] = 1 << 13
 }
 
 func (p *Program) findRoots() {
