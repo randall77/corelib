@@ -94,6 +94,8 @@ func (p *Program) findSpan(a core.Address) span {
 	return span{}
 }
 
+// isPtr reports whether the inferior at address a contains a pointer.
+// a must be somewhere in the heap.
 func (p *Program) isPtr(a core.Address) bool {
 	// Convert arena offset in words to bitmap offset in bits.
 	off := a.Sub(p.arenaStart)
@@ -118,4 +120,15 @@ func (p *Program) FindObject(a core.Address) *Object {
 		return nil
 	}
 	return obj
+}
+
+// Pointers returns all the pointers contained in x.
+func (p *Program) Pointers(x *Object) []core.Address {
+	var r []core.Address
+	for a := x.Addr; a < x.Addr.Add(x.Size); a = a.Add(p.proc.PtrSize()) {
+		if p.isPtr(a) {
+			r = append(r, p.proc.ReadAddress(a))
+		}
+	}
+	return r
 }

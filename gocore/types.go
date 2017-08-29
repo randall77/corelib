@@ -63,6 +63,7 @@ func (p *Program) Goroutines() []*Goroutine {
 	return p.goroutines
 }
 
+// Objects returns all live objects in the heap.
 func (p *Program) Objects() []Object {
 	return p.objects
 }

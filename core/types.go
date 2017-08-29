@@ -176,8 +176,8 @@ func (m *Mapping) OrigSource() (string, int64) {
 type Thread struct {
 	pid  uint64   // thread/process ID
 	regs []uint64 // set depends on arch
-	pc   uint64   // program counter
-	sp   uint64   // stack pointer
+	pc   Address  // program counter
+	sp   Address  // stack pointer
 }
 
 func (t *Thread) Pid() uint64 {
@@ -192,11 +192,11 @@ func (t *Thread) Regs() []uint64 {
 	return t.regs
 }
 
-func (t *Thread) PC() uint64 {
+func (t *Thread) PC() Address {
 	return t.pc
 }
 
-func (t *Thread) SP() uint64 {
+func (t *Thread) SP() Address {
 	return t.sp
 }
 

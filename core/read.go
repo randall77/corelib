@@ -359,8 +359,8 @@ func (p *Process) readPRStatus(f *os.File, e *elf.File, desc []byte) error {
 		// 24: es
 		// 25: fs
 		// 26: gs
-		t.pc = t.regs[16]
-		t.sp = t.regs[19]
+		t.pc = Address(t.regs[16])
+		t.sp = Address(t.regs[19])
 	}
 	return nil
 }
