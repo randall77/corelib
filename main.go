@@ -13,185 +13,220 @@ import (
 )
 
 func main() {
-	file := os.Args[1]
+	var file string
+	var cmd string
+	if len(os.Args) <= 1 {
+		log.Fatalf("need core file")
+	}
+	file = os.Args[1]
+	if len(os.Args) > 2 {
+		cmd = os.Args[2]
+	}
 	p, err := core.Core(file)
 	if err != nil {
 		log.Fatalf("can't load %s: %v", file, err)
 	}
-	fmt.Printf("arch %s\n", p.Arch())
-	t := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.AlignRight)
-	fmt.Fprintf(t, "min\tmax\tperm\tsource\toriginal\t\n")
-	for _, m := range p.Mappings() {
-		perm := ""
-		if m.Perm()&core.Read != 0 {
-			perm += "r"
-		} else {
-			perm += "-"
-		}
-		if m.Perm()&core.Write != 0 {
-			perm += "w"
-		} else {
-			perm += "-"
-		}
-		if m.Perm()&core.Exec != 0 {
-			perm += "x"
-		} else {
-			perm += "-"
-		}
-		file, off := m.Source()
-		fmt.Fprintf(t, "%x\t%x\t%s\t%s@%x\t", m.Min(), m.Max(), perm, file, off)
-		if m.CopyOnWrite() {
-			file, off = m.OrigSource()
-			fmt.Fprintf(t, "%s@%x", file, off)
-		}
-		fmt.Fprintf(t, "\t\n")
-	}
-	t.Flush()
-
 	c, err := gocore.Core(p)
 	if err != nil {
 		log.Fatalf("could not read %s: %v", file, err)
 	}
-	fmt.Printf("build version %s\n", c.BuildVersion())
 
-	for _, g := range c.Goroutines() {
-		fmt.Printf("G stacksize=%x\n", g.Stack())
-		for _, f := range g.Frames() {
-			fmt.Printf("  %016x %016x %s+0x%x\n", f.Min(), f.Max(), f.Func().Name(), f.Offset())
-		}
-	}
+	switch cmd {
+	default:
+		fmt.Println(`
+        corelib <core file> <command>
 
-	// Produce an object histogram (bytes per type).
-	type bucket struct {
-		name  string
-		size  int64
-		count int64
-	}
-	var buckets []*bucket
-	m := map[string]*bucket{}
-	for _, obj := range c.Objects() {
-		var name string
-		if obj.Type == nil {
-			name = fmt.Sprintf("unk%d", obj.Size)
-		} else {
-			name = obj.Type.String()
-			n := obj.Size / obj.Type.Size()
-			if n > 1 {
-				if obj.Repeat < n {
-					name = fmt.Sprintf("[%d+%d?]%s", obj.Repeat, n-obj.Repeat, name)
-				} else {
-					name = fmt.Sprintf("[%d]%s", obj.Repeat, name)
-				}
-			}
+  overview: print a few overall statistics
+  mappings: print virtual memory mappings
+goroutines: list goroutines
+ histogram: print histogram of heap memory use by Go type
+ breakdown: print memory use by class
+  objgraph: dump object graph to a .dot file
+`)
+	case "overview":
+		t := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', 0)
+		fmt.Fprintf(t, "arch\t%s\n", p.Arch())
+		fmt.Fprintf(t, "runtime\t%s\n", c.BuildVersion())
+		var total int64
+		for _, m := range p.Mappings() {
+			total += m.Max().Sub(m.Min())
 		}
-		b := m[name]
-		if b == nil {
-			b = &bucket{name: name, size: obj.Size}
-			buckets = append(buckets, b)
-			m[name] = b
-		}
-		b.count++
-	}
-	sort.Slice(buckets, func(i, j int) bool {
-		return buckets[i].size*buckets[i].count > buckets[j].size*buckets[j].count
-	})
-	t = tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.AlignRight)
-	fmt.Fprintf(t, "%s\t%s\t%s\t %s\n", "count", "size", "bytes", "type")
-	var total int64
-	for _, e := range buckets {
-		fmt.Fprintf(t, "%d\t%d\t%d\t %s\n", e.count, e.size, e.count*e.size, e.name)
-		total += e.count * e.size
-	}
-	t.Flush()
-
-	alloc := c.Stats().Child("heap").Child("in use spans").Child("alloc")
-	alloc.Children = []*gocore.Stats{
-		&gocore.Stats{"live", total, nil},
-		&gocore.Stats{"garbage", alloc.Size - total, nil},
-	}
-
-	tw := tabwriter.NewWriter(os.Stdout, 0, 8, 1, ' ', tabwriter.AlignRight)
-	all := c.Stats().Size
-	var printStat func(*gocore.Stats, string)
-	printStat = func(s *gocore.Stats, indent string) {
-		comment := ""
-		switch s.Name {
-		case "bss":
-			comment = "(grab bag, includes OS thread stacks, ...)"
-		case "manual spans":
-			comment = "(Go stacks)"
-		}
-		fmt.Fprintf(tw, "%s\t%d\t%6.2f%%\t %s\n", fmt.Sprintf("%-20s", indent+s.Name), s.Size, float64(s.Size)*100/float64(all), comment)
-		for _, c := range s.Children {
-			printStat(c, indent+"  ")
-		}
-	}
-	printStat(c.Stats(), "")
-	tw.Flush()
-
-	// Dump object graph to output file.
-	w, err := os.Create("tmp.dot")
-	if err != nil {
-		panic(err)
-	}
-	fmt.Fprintf(w, "digraph {\n")
-	for i, r := range c.Roots() {
-		if !hasPtr(c, r.Addr, r.Type, r.Live) {
-			continue
-		}
-		src := fmt.Sprintf("r%d", i)
-		shape := "hexagon"
-		if r.Live != nil {
-			shape = "octagon"
-		}
-		fmt.Fprintf(w, "%s [label=\"%s\",shape=%s]\n", src, r.Name, shape)
-		addEdges(c, w, src, r.Addr, r.Type, r.Live)
-	}
-	for _, g := range c.Goroutines() {
-		last := fmt.Sprintf("o%x", g.Addr())
-		for _, f := range g.Frames() {
-			frame := fmt.Sprintf("f%x", f.Max())
-			fmt.Fprintf(w, "%s [label=\"%s\",shape=rectangle]\n", frame, f.Func().Name())
-			fmt.Fprintf(w, "%s -> %s [style=dotted]\n", last, frame)
-			last = frame
-			for _, r := range f.Roots() {
-				if !hasPtr(c, r.Addr, r.Type, r.Live) {
-					continue
-				}
-				addEdges1(c, w, frame, r.Name, r.Addr, r.Type, r.Live)
-			}
-		}
-	}
-	for _, obj := range c.Objects() {
-		var name string
-		if obj.Type == nil {
-			name = fmt.Sprintf("unk%d", obj.Size)
-		} else {
-			name = obj.Type.String()
-			n := obj.Size / obj.Type.Size()
-			if n > 1 {
-				if obj.Repeat < n {
-					name = fmt.Sprintf("[%d+%d?]%s", obj.Repeat, n-obj.Repeat, name)
-				} else {
-					name = fmt.Sprintf("[%d]%s", obj.Repeat, name)
-				}
-			}
-		}
-		src := fmt.Sprintf("o%x", obj.Addr)
-		fmt.Fprintf(w, "%s [label=\"%s\\n%d\"]\n", src, name, obj.Size)
-		if obj.Type != nil { // TODO: what to do for typ==nil?
-			if obj.Repeat == 1 {
-				addEdges(c, w, src, obj.Addr, obj.Type, nil)
+		fmt.Fprintf(t, "memory\t%.1f MB\n", float64(total)/(1<<20))
+		t.Flush()
+	case "mappings":
+		t := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.AlignRight)
+		fmt.Fprintf(t, "min\tmax\tperm\tsource\toriginal\t\n")
+		for _, m := range p.Mappings() {
+			perm := ""
+			if m.Perm()&core.Read != 0 {
+				perm += "r"
 			} else {
-				for i := int64(0); i < obj.Repeat; i++ {
-					addEdges1(c, w, src, fmt.Sprintf("[%d]", i), obj.Addr.Add(i*obj.Type.Size()), obj.Type, nil)
+				perm += "-"
+			}
+			if m.Perm()&core.Write != 0 {
+				perm += "w"
+			} else {
+				perm += "-"
+			}
+			if m.Perm()&core.Exec != 0 {
+				perm += "x"
+			} else {
+				perm += "-"
+			}
+			file, off := m.Source()
+			fmt.Fprintf(t, "%x\t%x\t%s\t%s@%x\t", m.Min(), m.Max(), perm, file, off)
+			if m.CopyOnWrite() {
+				file, off = m.OrigSource()
+				fmt.Fprintf(t, "%s@%x", file, off)
+			}
+			fmt.Fprintf(t, "\t\n")
+		}
+		t.Flush()
+	case "goroutines":
+
+		for _, g := range c.Goroutines() {
+			fmt.Printf("G stacksize=%x\n", g.Stack())
+			for _, f := range g.Frames() {
+				fmt.Printf("  %016x %016x %s+0x%x\n", f.Min(), f.Max(), f.Func().Name(), f.Offset())
+			}
+		}
+	case "histogram":
+		// Produce an object histogram (bytes per type).
+		type bucket struct {
+			name  string
+			size  int64
+			count int64
+		}
+		var buckets []*bucket
+		m := map[string]*bucket{}
+		for _, obj := range c.Objects() {
+			var name string
+			if obj.Type == nil {
+				name = fmt.Sprintf("unk%d", obj.Size)
+			} else {
+				name = obj.Type.String()
+				n := obj.Size / obj.Type.Size()
+				if n > 1 {
+					if obj.Repeat < n {
+						name = fmt.Sprintf("[%d+%d?]%s", obj.Repeat, n-obj.Repeat, name)
+					} else {
+						name = fmt.Sprintf("[%d]%s", obj.Repeat, name)
+					}
+				}
+			}
+			b := m[name]
+			if b == nil {
+				b = &bucket{name: name, size: obj.Size}
+				buckets = append(buckets, b)
+				m[name] = b
+			}
+			b.count++
+		}
+		sort.Slice(buckets, func(i, j int) bool {
+			return buckets[i].size*buckets[i].count > buckets[j].size*buckets[j].count
+		})
+		t := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.AlignRight)
+		fmt.Fprintf(t, "%s\t%s\t%s\t %s\n", "count", "size", "bytes", "type")
+		for _, e := range buckets {
+			fmt.Fprintf(t, "%d\t%d\t%d\t %s\n", e.count, e.size, e.count*e.size, e.name)
+		}
+		t.Flush()
+
+	case "breakdown":
+		var total int64
+		for _, obj := range c.Objects() {
+			total += obj.Size
+		}
+		alloc := c.Stats().Child("heap").Child("in use spans").Child("alloc")
+		alloc.Children = []*gocore.Stats{
+			&gocore.Stats{"live", total, nil},
+			&gocore.Stats{"garbage", alloc.Size - total, nil},
+		}
+
+		t := tabwriter.NewWriter(os.Stdout, 0, 8, 1, ' ', tabwriter.AlignRight)
+		all := c.Stats().Size
+		var printStat func(*gocore.Stats, string)
+		printStat = func(s *gocore.Stats, indent string) {
+			comment := ""
+			switch s.Name {
+			case "bss":
+				comment = "(grab bag, includes OS thread stacks, ...)"
+			case "manual spans":
+				comment = "(Go stacks)"
+			}
+			fmt.Fprintf(t, "%s\t%d\t%6.2f%%\t %s\n", fmt.Sprintf("%-20s", indent+s.Name), s.Size, float64(s.Size)*100/float64(all), comment)
+			for _, c := range s.Children {
+				printStat(c, indent+"  ")
+			}
+		}
+		printStat(c.Stats(), "")
+		t.Flush()
+	case "objgraph":
+
+		// Dump object graph to output file.
+		w, err := os.Create("tmp.dot")
+		if err != nil {
+			panic(err)
+		}
+		fmt.Fprintf(w, "digraph {\n")
+		for i, r := range c.Roots() {
+			if !hasPtr(c, r.Addr, r.Type, r.Live) {
+				continue
+			}
+			src := fmt.Sprintf("r%d", i)
+			shape := "hexagon"
+			if r.Live != nil {
+				shape = "octagon"
+			}
+			fmt.Fprintf(w, "%s [label=\"%s\",shape=%s]\n", src, r.Name, shape)
+			addEdges(c, w, src, r.Addr, r.Type, r.Live)
+		}
+		for _, g := range c.Goroutines() {
+			last := fmt.Sprintf("o%x", g.Addr())
+			for _, f := range g.Frames() {
+				frame := fmt.Sprintf("f%x", f.Max())
+				fmt.Fprintf(w, "%s [label=\"%s\",shape=rectangle]\n", frame, f.Func().Name())
+				fmt.Fprintf(w, "%s -> %s [style=dotted]\n", last, frame)
+				last = frame
+				for _, r := range f.Roots() {
+					if !hasPtr(c, r.Addr, r.Type, r.Live) {
+						continue
+					}
+					addEdges1(c, w, frame, r.Name, r.Addr, r.Type, r.Live)
 				}
 			}
 		}
-		// TODO: data beyond obj.Repeat*obj.Type.Size
+		for _, obj := range c.Objects() {
+			var name string
+			if obj.Type == nil {
+				name = fmt.Sprintf("unk%d", obj.Size)
+			} else {
+				name = obj.Type.String()
+				n := obj.Size / obj.Type.Size()
+				if n > 1 {
+					if obj.Repeat < n {
+						name = fmt.Sprintf("[%d+%d?]%s", obj.Repeat, n-obj.Repeat, name)
+					} else {
+						name = fmt.Sprintf("[%d]%s", obj.Repeat, name)
+					}
+				}
+			}
+			src := fmt.Sprintf("o%x", obj.Addr)
+			fmt.Fprintf(w, "%s [label=\"%s\\n%d\"]\n", src, name, obj.Size)
+			if obj.Type != nil { // TODO: what to do for typ==nil?
+				if obj.Repeat == 1 {
+					addEdges(c, w, src, obj.Addr, obj.Type, nil)
+				} else {
+					for i := int64(0); i < obj.Repeat; i++ {
+						addEdges1(c, w, src, fmt.Sprintf("[%d]", i), obj.Addr.Add(i*obj.Type.Size()), obj.Type, nil)
+					}
+				}
+			}
+			// TODO: data beyond obj.Repeat*obj.Type.Size
+		}
+		fmt.Fprintf(w, "}")
+		w.Close()
 	}
-	fmt.Fprintf(w, "}")
-	w.Close()
 }
 
 func addEdges(p *gocore.Program, w io.Writer, src string, a core.Address, t *gocore.Type, live map[core.Address]bool) {
