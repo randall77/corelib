@@ -176,6 +176,8 @@ func (m *Mapping) OrigSource() (string, int64) {
 type Thread struct {
 	pid  uint64   // thread/process ID
 	regs []uint64 // set depends on arch
+	pc   uint64   // program counter
+	sp   uint64   // stack pointer
 }
 
 func (t *Thread) Pid() uint64 {
@@ -189,6 +191,16 @@ func (t *Thread) Pid() uint64 {
 func (t *Thread) Regs() []uint64 {
 	return t.regs
 }
+
+func (t *Thread) PC() uint64 {
+	return t.pc
+}
+
+func (t *Thread) SP() uint64 {
+	return t.sp
+}
+
+// TODO: link register?
 
 // A Perm represents the permissions allowed for a Mapping.
 type Perm uint8

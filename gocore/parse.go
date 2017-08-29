@@ -558,10 +558,8 @@ func (p *Program) readG(r region) *Goroutine {
 		sp = core.Address(sched.Field("sp").Uintptr())
 		pc = core.Address(sched.Field("pc").Uintptr())
 	case status == uint32(p.rtConstants["_Grunning"]):
-		regs := osT.Regs()
-		// or 9? or 4?
-		sp = core.Address(regs[19]) // TODO: how are these offsets possibly right?
-		pc = core.Address(regs[11])
+		sp = osT.SP()
+		pc = osT.PC()
 		// TODO: back up to the calling frame?
 	case status == uint32(p.rtConstants["_Gsyscall"]):
 		sp = core.Address(r.Field("syscallsp").Uintptr())

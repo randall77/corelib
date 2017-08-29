@@ -189,6 +189,8 @@ func (p *Process) readNote(f *os.File, e *elf.File, off, size uint64) error {
 				return err
 			}
 		}
+		// TODO: NT_FPREGSET for floating-point registers
+		// TODO: NT_PRPSINFO for ???
 	}
 	return nil
 }
@@ -304,19 +306,62 @@ func (p *Process) splitMappingsAt(a Address) {
 }
 
 func (p *Process) readPRStatus(f *os.File, e *elf.File, desc []byte) error {
-	greg := make([]uint64, len(desc)/8)
-	for i := range greg {
-		greg[i] = p.byteOrder.Uint64(desc[8*i:])
+	t := &Thread{}
+	p.threads = append(p.threads, t)
+	// Linux
+	//   sys/procfs.h:
+	//     struct elf_prstatus {
+	//       ...
+	//       pid_t	pr_pid;
+	//       ...
+	//       elf_gregset_t pr_reg;	/* GP registers */
+	//       ...
+	//     };
+	//   typedef struct elf_prstatus prstatus_t;
+	// Register numberings are listed in sys/user.h.
+	// prstatus layout will probably be different for each arch/os combo.
+	switch p.arch {
+	default:
+		// TODO: return error here?
+	case "amd64":
+		// 32 = offsetof(prstatus_t, pr_pid), 4 = sizeof(pid_t)
+		t.pid = uint64(p.byteOrder.Uint32(desc[32 : 32+4]))
+		// 112 = offsetof(prstatus_t, pr_reg), 216 = sizeof(elf_gregset_t)
+		reg := desc[112 : 112+216]
+		for i := 0; i < len(reg); i += 8 {
+			t.regs = append(t.regs, p.byteOrder.Uint64(reg[i:]))
+		}
+		// Registers are:
+		//  0: r15
+		//  1: r14
+		//  2: r13
+		//  3: r12
+		//  4: rbp
+		//  5: rbx
+		//  6: r11
+		//  7: r10
+		//  8: r9
+		//  9: r8
+		// 10: rax
+		// 11: rcx
+		// 12: rdx
+		// 13: rsi
+		// 14: rdi
+		// 15: orig_rax
+		// 16: rip
+		// 17: cs
+		// 18: eflags
+		// 19: rsp
+		// 20: ss
+		// 21: fs_base
+		// 22: gs_base
+		// 23: ds
+		// 24: es
+		// 25: fs
+		// 26: gs
+		t.pc = t.regs[16]
+		t.sp = t.regs[19]
 	}
-	pid := uint64(uint32(greg[4]))
-	//greg = greg[14:] // skip ahead to elf_greset_t
-	//for i, v := range greg[:27] {
-	//	fmt.Printf(" %2d %16x\n", i, v)
-	//}
-	//fmt.Printf("\n")
-	// possible pcs: 1,11,16
-	// possible sp/bps: 4,9,19,21?
-	p.threads = append(p.threads, &Thread{pid: pid, regs: greg[14 : len(greg)-1]})
 	return nil
 }
 
