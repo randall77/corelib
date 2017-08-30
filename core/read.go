@@ -4,19 +4,21 @@ import (
 	"debug/elf"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
 
 // Core takes the name of a core file and returns a Process that
 // represents the state of the inferior that generated the core file.
-func Core(coreFile string) (*Process, error) {
+func Core(coreFile, base string) (*Process, error) {
 	core, err := os.Open(coreFile)
 	if err != nil {
 		return nil, err
 	}
 
 	p := new(Process)
+	p.base = base
 	if err := p.readCore(core); err != nil {
 		return nil, err
 	}
@@ -221,7 +223,7 @@ func (p *Process) readNTFile(f *os.File, e *elf.File, desc []byte) error {
 			filenames = ""
 		}
 
-		backing, err := os.Open(name)
+		backing, err := os.Open(filepath.Join(p.base, name))
 		if err != nil {
 			// Can't find mapped file.
 			// TODO: if we debug on a different machine,

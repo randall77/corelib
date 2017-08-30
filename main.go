@@ -1,9 +1,9 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"sort"
 	"text/tabwriter"
@@ -12,37 +12,67 @@ import (
 	"github.com/randall77/corelib/gocore"
 )
 
+func usage() {
+	fmt.Println(`
+Usage:
+
+        corelib command corefile
+
+The commands are:
+
+        help: print this message
+    overview: print a few overall statistics
+    mappings: print virtual memory mappings
+  goroutines: list goroutines
+   histogram: print histogram of heap memory use by Go type
+   breakdown: print memory use by class
+    objgraph: dump object graph to a .dot file
+
+Flags applicable to all commands:
+`)
+	flag.PrintDefaults()
+}
+
 func main() {
-	var file string
-	var cmd string
-	if len(os.Args) <= 1 {
-		log.Fatalf("need core file")
+	base := flag.String("base", "", "root directory to find core dump file references")
+	flag.Parse()
+
+	// Extract command.
+	args := flag.Args()
+	if len(args) < 1 {
+		fmt.Fprintf(os.Stderr, "%s: no command specified\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Run 'corelib help' for usage.\n")
+		os.Exit(2)
 	}
-	file = os.Args[1]
-	if len(os.Args) > 2 {
-		cmd = os.Args[2]
+	cmd := args[0]
+	if cmd == "help" {
+		usage()
+		return
 	}
-	p, err := core.Core(file)
+
+	// All commands other than "help" need a core file.
+	if len(args) < 2 {
+		fmt.Fprintf(os.Stderr, "%s: no core dump specified for command %s\n", os.Args[0], cmd)
+		fmt.Fprintf(os.Stderr, "Run 'corelib help' for usage.\n")
+		os.Exit(2)
+	}
+	file := args[1]
+	p, err := core.Core(file, *base)
 	if err != nil {
-		log.Fatalf("can't load %s: %v", file, err)
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
 	}
 	c, err := gocore.Core(p)
 	if err != nil {
-		log.Fatalf("could not read %s: %v", file, err)
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
 	}
 
 	switch cmd {
 	default:
-		fmt.Println(`
-        corelib <core file> <command>
-
-  overview: print a few overall statistics
-  mappings: print virtual memory mappings
-goroutines: list goroutines
- histogram: print histogram of heap memory use by Go type
- breakdown: print memory use by class
-  objgraph: dump object graph to a .dot file
-`)
+		fmt.Fprintf(os.Stderr, "%s: unknown command %s\n", os.Args[0], cmd)
+		fmt.Fprintf(os.Stderr, "Run 'corelib help' for usage.\n")
+		os.Exit(2)
 	case "overview":
 		t := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', 0)
 		fmt.Fprintf(t, "arch\t%s\n", p.Arch())

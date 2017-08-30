@@ -56,6 +56,7 @@ func (a Address) Align(x int64) Address {
 
 // A Process represents the state of the process that core dumped.
 type Process struct {
+	base      string             // base directory from which files in the core can be found
 	exec      []*os.File         // executables (more than one for shlibs)
 	maps      []*Mapping         // virtual address mappings
 	threads   []*Thread          // os threads (TODO: map from pid?)
