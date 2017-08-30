@@ -260,11 +260,11 @@ func (p *Program) typeHeap() {
 		if t == nil {
 			return // TODO: why?
 		}
-		obj := p.FindObject(a)
+		obj, off := p.FindObject(a)
 		if obj == nil { // pointer doesn't point to an object in the Go heap
 			return
 		}
-		if obj.Addr != a {
+		if off != 0 {
 			// Ignore interior pointers.
 			// TODO: Maybe we could extract some useful info here?
 			// Keep offset/type pairs for an object + have a merge
@@ -284,7 +284,7 @@ func (p *Program) typeHeap() {
 	}
 
 	// Get typings starting at roots.
-	for _, r := range p.roots {
+	for _, r := range p.globals {
 		p.typeObject(r.Addr, r.Type, p.proc, add)
 	}
 	fr := &frameReader{p: p}
@@ -505,7 +505,7 @@ func (p *Program) findRoots() {
 		if _, ok := dt.(*dwarf.UnspecifiedType); ok {
 			continue // Ignore markers like data/edata.
 		}
-		p.roots = append(p.roots, Root{
+		p.globals = append(p.globals, &Root{
 			Name: e.AttrField(dwarf.AttrName).Val.(string),
 			Addr: a,
 			Type: p.dwarfMap[dt],
@@ -587,7 +587,7 @@ func (p *Program) findRoots() {
 	for _, g := range p.goroutines {
 		for _, f := range g.frames {
 			for _, v := range vars[f.f] {
-				f.roots = append(f.roots, Root{
+				f.roots = append(f.roots, &Root{
 					Name: v.name,
 					Addr: f.max.Add(v.off),
 					Type: v.typ,

@@ -78,6 +78,12 @@ func (p *Program) readObjects() {
 	sort.Slice(p.objects, func(i, j int) bool {
 		return p.objects[i].Addr < p.objects[j].Addr
 	})
+
+	// Build array-of-pointers for easy iteration over objects.
+	p.objPtrs = make([]*Object, len(p.objects))
+	for i := range p.objects {
+		p.objPtrs[i] = &p.objects[i]
+	}
 }
 
 func (p *Program) findSpan(a core.Address) span {
@@ -106,29 +112,95 @@ func (p *Program) isPtr(a core.Address) bool {
 	return p.proc.ReadUint8(p.bitmapEnd.Add(-off/4-1))>>uint(off%4)&1 != 0
 }
 
-// FindObject finds the object containing a.
+// FindObject finds the object containing a.  Returns that object and the offset within
+// that object to which a points.
 // Returns nil if a doesn't point to a live heap object.
-func (p *Program) FindObject(a core.Address) *Object {
+func (p *Program) FindObject(a core.Address) (*Object, int64) {
 	i := sort.Search(len(p.objects), func(i int) bool {
 		return a < p.objects[i].Addr.Add(p.objects[i].Size)
 	})
 	if i == len(p.objects) {
-		return nil
+		return nil, 0
 	}
 	obj := &p.objects[i]
-	if a < p.objects[i].Addr {
-		return nil
+	if a < obj.Addr {
+		return nil, 0
 	}
-	return obj
+	return obj, a.Sub(obj.Addr)
 }
 
-// Pointers returns all the pointers contained in x.
-func (p *Program) Pointers(x *Object) []core.Address {
-	var r []core.Address
-	for a := x.Addr; a < x.Addr.Add(x.Size); a = a.Add(p.proc.PtrSize()) {
-		if p.isPtr(a) {
-			r = append(r, p.proc.ReadAddress(a))
+// ForEachEdge calls fn for all heap pointers it finds in x.
+// It calls fn with:
+//   the offset of the pointer slot in x
+//   the pointed-to object y
+//   the offset in y where the pointer points.
+// If fn returns false, ForEachEdge returns immediately.
+func (p *Program) ForEachEdge(x *Object, fn func(int64, *Object, int64) bool) {
+	for i := int64(0); i < x.Size; i += p.proc.PtrSize() {
+		a := x.Addr.Add(i)
+		if !p.isPtr(a) {
+			continue
+		}
+		ptr := p.proc.ReadAddress(a)
+		y, off := p.FindObject(ptr)
+		if y != nil {
+			if !fn(i, y, off) {
+				return
+			}
 		}
 	}
-	return r
+}
+
+// ForEachRootEdge behaves like ForEachEdge but it starts with a Root instead of an Object.
+func (p *Program) ForEachRootEdge(r *Root, fn func(int64, *Object, int64) bool) {
+	edges1(p, r, 0, r.Type, fn)
+}
+
+// edges1 calls fn for the edges found in an object of type t living at offset off in the root r.
+// If fn returns false, return immediately with false.
+func edges1(p *Program, r *Root, off int64, t *Type, fn func(int64, *Object, int64) bool) bool {
+	switch t.Kind {
+	case KindBool, KindInt, KindUint, KindFloat, KindComplex:
+		// no edges here
+	case KindIface, KindEface:
+		// The first word is a type or itab.
+		// Itabs are never in the heap.
+		// Types might be, though.
+		a := r.Addr.Add(off)
+		if r.Live == nil || r.Live[a] {
+			dst, off2 := p.FindObject(p.proc.ReadAddress(a))
+			if dst != nil {
+				if !fn(off, dst, off2) {
+					return false
+				}
+			}
+		}
+		// Treat second word like a pointer.
+		off += p.proc.PtrSize()
+		fallthrough
+	case KindPtr, KindString, KindSlice, KindFunc:
+		a := r.Addr.Add(off)
+		if r.Live == nil || r.Live[a] {
+			dst, off2 := p.FindObject(p.proc.ReadAddress(a))
+			if dst != nil {
+				if !fn(off, dst, off2) {
+					return false
+				}
+			}
+		}
+	case KindArray:
+		s := t.Elem.Size()
+		for i := int64(0); i < t.Count; i++ {
+			if !edges1(p, r, off+i*s, t.Elem, fn) {
+				return false
+			}
+		}
+	case KindStruct:
+		for _, f := range t.Fields {
+			if !edges1(p, r, off+f.Off, f.Type, fn) {
+				return false
+			}
+		}
+	}
+	return true
 }

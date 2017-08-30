@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
 	"text/tabwriter"
 
 	"github.com/randall77/corelib/core"
@@ -26,7 +27,9 @@ The commands are:
   goroutines: list goroutines
    histogram: print histogram of heap memory use by Go type
    breakdown: print memory use by class
+     objects: print a list of all live objects
     objgraph: dump object graph to a .dot file
+   reachable: find path from root to an object
 
 Flags applicable to all commands:
 `)
@@ -199,7 +202,7 @@ func main() {
 			panic(err)
 		}
 		fmt.Fprintf(w, "digraph {\n")
-		for i, r := range c.Roots() {
+		for i, r := range c.Globals() {
 			if !hasPtr(c, r.Addr, r.Type, r.Live) {
 				continue
 			}
@@ -256,6 +259,126 @@ func main() {
 		}
 		fmt.Fprintf(w, "}")
 		w.Close()
+	case "objects":
+		for _, x := range c.Objects() {
+			fmt.Printf("%16x %s\n", x.Addr, typeName(x))
+		}
+
+	case "reachable":
+		if len(args) < 3 {
+			fmt.Fprintf(os.Stderr, "no object address provided\n")
+			os.Exit(1)
+		}
+		n, err := strconv.ParseInt(args[2], 16, 64)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "can't parse %s as an object address\n", args[2])
+			os.Exit(1)
+		}
+		a := core.Address(n)
+		obj, _ := c.FindObject(a)
+		if obj == nil {
+			fmt.Fprintf(os.Stderr, "can't find object at address %s\n", args[2])
+			os.Exit(1)
+		}
+
+		// Find the set of objects that can reach the query object.
+		// Map value is the minimum distance to query object + 1.
+		m := map[*gocore.Object]int64{}
+		m[obj] = 1
+
+		for {
+			changed := false
+			for _, x := range c.Objects() {
+				c.ForEachEdge(x, func(_ int64, y *gocore.Object, _ int64) bool {
+					if m[y] != 0 && (m[x] == 0 || m[x] > m[y]+1) {
+						m[x] = m[y] + 1
+						changed = true
+					}
+					return true
+				})
+			}
+			if !changed {
+				break
+			}
+		}
+
+		// Find a minimum distance root.
+		var mind int64
+		var minr *gocore.Root
+		var minf *gocore.Frame
+		var ming *gocore.Goroutine
+		for _, r := range c.Globals() {
+			c.ForEachRootEdge(r, func(_ int64, y *gocore.Object, _ int64) bool {
+				if m[y] != 0 && (mind == 0 || m[y] < mind) {
+					mind = m[y]
+					minr = r
+					minf = nil
+					ming = nil
+				}
+				return true
+			})
+		}
+		for _, g := range c.Goroutines() {
+			for _, f := range g.Frames() {
+				for _, r := range f.Roots() {
+					c.ForEachRootEdge(r, func(_ int64, y *gocore.Object, _ int64) bool {
+						if m[y] != 0 && (mind == 0 || m[y] < mind) {
+							mind = m[y]
+							minr = r
+							minf = f
+							ming = g
+						}
+						return true
+					})
+				}
+			}
+		}
+		if mind == 0 {
+			panic("can't find root holding object live")
+		}
+
+		// Print minimum distance path to object.
+		if minf != nil {
+			fs := ming.Frames()
+			for i := len(fs) - 1; i >= 0; i-- {
+				f := fs[i]
+				if f != minf {
+					fmt.Printf("%s\n", f.Func().Name())
+				} else {
+					fmt.Printf("%s ", f.Func().Name())
+					break
+				}
+			}
+		}
+		var x *gocore.Object
+		c.ForEachRootEdge(minr, func(i int64, y *gocore.Object, j int64) bool {
+			if m[y] != mind {
+				return true
+			}
+			fmt.Printf("%s %s %s ->", minr.Name, minr.Type, typeFieldName(minr.Type, i))
+			if j != 0 {
+				fmt.Printf(" +%d", j)
+			}
+			fmt.Println()
+			x = y
+			return false
+		})
+		for d := mind - 1; d != 0; d-- {
+			fmt.Printf("%x %s", x.Addr, typeName(x))
+			c.ForEachEdge(x, func(i int64, y *gocore.Object, j int64) bool {
+				if m[y] != d {
+					return true
+				}
+				fmt.Printf(" %s ->", fieldName(x, i))
+				if j != 0 {
+					fmt.Printf(" +%d", j)
+				}
+				fmt.Println()
+				x = y
+				return false
+			})
+		}
+		fmt.Printf("%x %s\n", x.Addr, typeName(x))
 	}
 }
 
@@ -270,7 +393,7 @@ func addEdges1(p *gocore.Program, w io.Writer, src, field string, a core.Address
 		// Itabs are never in the heap.
 		// Types might be, though.
 		if live == nil || live[a] {
-			dst := p.FindObject(p.Process().ReadAddress(a))
+			dst, _ := p.FindObject(p.Process().ReadAddress(a))
 			if dst != nil {
 				fmt.Fprintf(w, "%s -> o%x [label=\"%s\"]\n", src, dst.Addr, field+".type")
 			}
@@ -282,7 +405,7 @@ func addEdges1(p *gocore.Program, w io.Writer, src, field string, a core.Address
 		if live != nil && !live[a] {
 			break // Treat reads from addresses not in live as returning nil.
 		}
-		dst := p.FindObject(p.Process().ReadAddress(a))
+		dst, _ := p.FindObject(p.Process().ReadAddress(a))
 		if dst == nil {
 			break
 		}
@@ -313,11 +436,13 @@ func hasPtr(p *gocore.Program, a core.Address, t *gocore.Type, live map[core.Add
 		if live != nil && !live[a] {
 			return false
 		}
-		return p.FindObject(p.Process().ReadAddress(a)) != nil
+		q, _ := p.FindObject(p.Process().ReadAddress(a))
+		return q != nil
 	case gocore.KindIface, gocore.KindEface:
 		for i := 0; i < 2; i++ {
 			if live != nil && !live[a] {
-				if p.FindObject(p.Process().ReadAddress(a)) != nil {
+				q, _ := p.FindObject(p.Process().ReadAddress(a))
+				if q != nil {
 					return true
 				}
 			}
@@ -342,4 +467,78 @@ func hasPtr(p *gocore.Program, a core.Address, t *gocore.Type, live map[core.Add
 	default:
 		panic("bad")
 	}
+}
+
+// typeName returns a string representing the type of this object.
+func typeName(x *gocore.Object) string {
+	if x.Type == nil {
+		return fmt.Sprintf("unk%d", x.Size)
+	}
+	name := x.Type.String()
+	n := x.Size / x.Type.Size()
+	if n > 1 {
+		if x.Repeat < n {
+			name = fmt.Sprintf("[%d+%d?]%s", x.Repeat, n-x.Repeat, name)
+		} else {
+			name = fmt.Sprintf("[%d]%s", x.Repeat, name)
+		}
+	}
+	return name
+}
+
+// fieldName returns the name of the field at offset off in x.
+func fieldName(x *gocore.Object, off int64) string {
+	if x.Type == nil {
+		return fmt.Sprintf("f%d", off)
+	}
+	n := x.Size / x.Type.Size()
+	i := off / x.Type.Size()
+	if i == 0 && x.Repeat == 1 {
+		// Probably a singleton object, no need for array notation.
+		return typeFieldName(x.Type, off)
+	}
+	if i >= n {
+		// Partial space at the end of the object - the type can't be complete.
+		return fmt.Sprintf("f%d", off)
+	}
+	q := ""
+	if i >= x.Repeat {
+		// Past the known repeat section, add a ? because we're not sure about the type.
+		q = "?"
+	}
+	return fmt.Sprintf("[%d]%s%s", i, typeFieldName(x.Type, off-i*x.Type.Size()), q)
+}
+
+// typeFieldName returns the name of the field at offset off in t.
+func typeFieldName(t *gocore.Type, off int64) string {
+	switch t.Kind {
+	case gocore.KindBool, gocore.KindInt, gocore.KindUint, gocore.KindFloat, gocore.KindComplex:
+		return ""
+	case gocore.KindIface, gocore.KindEface:
+		if off == 0 {
+			return ".type"
+		}
+		return ".data"
+	case gocore.KindPtr, gocore.KindFunc:
+		return ""
+	case gocore.KindString, gocore.KindSlice:
+		if off == 0 {
+			return ".ptr"
+		}
+		if off <= t.Size()/2 {
+			return ".len"
+		}
+		return ".cap"
+	case gocore.KindArray:
+		s := t.Elem.Size()
+		i := off / s
+		return fmt.Sprintf("[%d]", i) + typeFieldName(t.Elem, off-i*s)
+	case gocore.KindStruct:
+		for _, f := range t.Fields {
+			if f.Off <= off && off < f.Off+f.Type.Size() {
+				return "." + f.Name + typeFieldName(f.Type, off-f.Off)
+			}
+		}
+	}
+	return "???"
 }

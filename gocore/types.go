@@ -45,13 +45,14 @@ type Program struct {
 
 	// All live objects in the heap.
 	objects []Object
+	objPtrs []*Object
 
 	// memory usage by category
 	stats *Stats
 
 	buildVersion string
 
-	roots []Root
+	globals []*Root
 }
 
 // Process returns the core passed to Core().
@@ -64,8 +65,8 @@ func (p *Program) Goroutines() []*Goroutine {
 }
 
 // Objects returns all live objects in the heap.
-func (p *Program) Objects() []Object {
-	return p.objects
+func (p *Program) Objects() []*Object {
+	return p.objPtrs
 }
 
 func (p *Program) Stats() *Stats {
@@ -77,8 +78,8 @@ func (p *Program) BuildVersion() string {
 	return p.buildVersion
 }
 
-func (p *Program) Roots() []Root {
-	return p.roots
+func (p *Program) Globals() []*Root {
+	return p.globals
 }
 
 type Goroutine struct {
@@ -117,7 +118,7 @@ type Frame struct {
 	// for the frame).
 	live map[core.Address]bool
 
-	roots []Root
+	roots []*Root
 
 	// TODO: keep vars from dwarf around?
 }
@@ -136,7 +137,7 @@ func (f *Frame) Max() core.Address {
 func (f *Frame) Offset() int64 {
 	return f.off
 }
-func (f *Frame) Roots() []Root {
+func (f *Frame) Roots() []*Root {
 	return f.roots
 }
 
