@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"sort"
 	"strconv"
@@ -202,17 +201,20 @@ func main() {
 			panic(err)
 		}
 		fmt.Fprintf(w, "digraph {\n")
-		for i, r := range c.Globals() {
-			if !hasPtr(c, r.Addr, r.Type, r.Live) {
-				continue
-			}
-			src := fmt.Sprintf("r%d", i)
-			shape := "hexagon"
-			if r.Live != nil {
-				shape = "octagon"
-			}
-			fmt.Fprintf(w, "%s [label=\"%s\",shape=%s]\n", src, r.Name, shape)
-			addEdges(c, w, src, r.Addr, r.Type, r.Live)
+		for k, r := range c.Globals() {
+			printed := false
+			c.ForEachRootEdge(r, func(i int64, y *gocore.Object, j int64) bool {
+				if !printed {
+					fmt.Fprintf(w, "r%d [label=\"%s\n%s\",shape=hexagon]\n", k, r.Name, r.Type)
+					printed = true
+				}
+				fmt.Fprintf(w, "r%d -> o%x [label=\"%s\"", k, y.Addr, typeFieldName(r.Type, i))
+				if j != 0 {
+					fmt.Fprintf(w, " ,headlabel=\"+%d\"", j)
+				}
+				fmt.Fprintf(w, "]\n")
+				return true
+			})
 		}
 		for _, g := range c.Goroutines() {
 			last := fmt.Sprintf("o%x", g.Addr())
@@ -222,40 +224,27 @@ func main() {
 				fmt.Fprintf(w, "%s -> %s [style=dotted]\n", last, frame)
 				last = frame
 				for _, r := range f.Roots() {
-					if !hasPtr(c, r.Addr, r.Type, r.Live) {
-						continue
-					}
-					addEdges1(c, w, frame, r.Name, r.Addr, r.Type, r.Live)
+					c.ForEachRootEdge(r, func(i int64, y *gocore.Object, j int64) bool {
+						fmt.Fprintf(w, "%s -> o%x [label=\"%s%s\"", frame, y.Addr, r.Name, typeFieldName(r.Type, i))
+						if j != 0 {
+							fmt.Fprintf(w, " ,headlabel=\"+%d\"", j)
+						}
+						fmt.Fprintf(w, "]\n")
+						return true
+					})
 				}
 			}
 		}
-		for _, obj := range c.Objects() {
-			var name string
-			if obj.Type == nil {
-				name = fmt.Sprintf("unk%d", obj.Size)
-			} else {
-				name = obj.Type.String()
-				n := obj.Size / obj.Type.Size()
-				if n > 1 {
-					if obj.Repeat < n {
-						name = fmt.Sprintf("[%d+%d?]%s", obj.Repeat, n-obj.Repeat, name)
-					} else {
-						name = fmt.Sprintf("[%d]%s", obj.Repeat, name)
-					}
+		for _, x := range c.Objects() {
+			fmt.Fprintf(w, "o%x [label=\"%s\\n%d\"]\n", x.Addr, typeName(x), x.Size)
+			c.ForEachEdge(x, func(i int64, y *gocore.Object, j int64) bool {
+				fmt.Fprintf(w, "o%x -> o%x [label=\"%s\"", x.Addr, y.Addr, fieldName(x, i))
+				if j != 0 {
+					fmt.Fprintf(w, ",headlabel=\"+%d\"", j)
 				}
-			}
-			src := fmt.Sprintf("o%x", obj.Addr)
-			fmt.Fprintf(w, "%s [label=\"%s\\n%d\"]\n", src, name, obj.Size)
-			if obj.Type != nil { // TODO: what to do for typ==nil?
-				if obj.Repeat == 1 {
-					addEdges(c, w, src, obj.Addr, obj.Type, nil)
-				} else {
-					for i := int64(0); i < obj.Repeat; i++ {
-						addEdges1(c, w, src, fmt.Sprintf("[%d]", i), obj.Addr.Add(i*obj.Type.Size()), obj.Type, nil)
-					}
-				}
-			}
-			// TODO: data beyond obj.Repeat*obj.Type.Size
+				fmt.Fprintf(w, "]\n")
+				return true
+			})
 		}
 		fmt.Fprintf(w, "}")
 		w.Close()
@@ -379,93 +368,6 @@ func main() {
 			})
 		}
 		fmt.Printf("%x %s\n", x.Addr, typeName(x))
-	}
-}
-
-func addEdges(p *gocore.Program, w io.Writer, src string, a core.Address, t *gocore.Type, live map[core.Address]bool) {
-	addEdges1(p, w, src, "", a, t, live)
-}
-func addEdges1(p *gocore.Program, w io.Writer, src, field string, a core.Address, t *gocore.Type, live map[core.Address]bool) {
-	switch t.Kind {
-	case gocore.KindBool, gocore.KindInt, gocore.KindUint, gocore.KindFloat, gocore.KindComplex:
-	case gocore.KindIface, gocore.KindEface:
-		// The first word is a type or itab.
-		// Itabs are never in the heap.
-		// Types might be, though.
-		if live == nil || live[a] {
-			dst, _ := p.FindObject(p.Process().ReadAddress(a))
-			if dst != nil {
-				fmt.Fprintf(w, "%s -> o%x [label=\"%s\"]\n", src, dst.Addr, field+".type")
-			}
-		}
-		// Treat second word like a pointer.
-		a = a.Add(p.Process().PtrSize())
-		fallthrough
-	case gocore.KindPtr, gocore.KindString, gocore.KindSlice, gocore.KindFunc:
-		if live != nil && !live[a] {
-			break // Treat reads from addresses not in live as returning nil.
-		}
-		dst, _ := p.FindObject(p.Process().ReadAddress(a))
-		if dst == nil {
-			break
-		}
-		fmt.Fprintf(w, "%s -> o%x [label=\"%s\"]\n", src, dst.Addr, field)
-	case gocore.KindArray:
-		s := t.Elem.Size()
-		for i := int64(0); i < t.Count; i++ {
-			addEdges1(p, w, src, fmt.Sprintf("%s[%d]", field, i), a.Add(i*s), t.Elem, live)
-		}
-	case gocore.KindStruct:
-		for _, f := range t.Fields {
-			var sub string
-			if field != "" {
-				sub = field + "." + f.Name
-			} else {
-				sub = f.Name
-			}
-			addEdges1(p, w, src, sub, a.Add(f.Off), f.Type, live)
-		}
-	}
-}
-
-func hasPtr(p *gocore.Program, a core.Address, t *gocore.Type, live map[core.Address]bool) bool {
-	switch t.Kind {
-	case gocore.KindBool, gocore.KindInt, gocore.KindUint, gocore.KindFloat, gocore.KindComplex:
-		return false
-	case gocore.KindPtr, gocore.KindString, gocore.KindSlice, gocore.KindFunc:
-		if live != nil && !live[a] {
-			return false
-		}
-		q, _ := p.FindObject(p.Process().ReadAddress(a))
-		return q != nil
-	case gocore.KindIface, gocore.KindEface:
-		for i := 0; i < 2; i++ {
-			if live != nil && !live[a] {
-				q, _ := p.FindObject(p.Process().ReadAddress(a))
-				if q != nil {
-					return true
-				}
-			}
-			a = a.Add(p.Process().PtrSize())
-		}
-		return false
-	case gocore.KindArray:
-		s := t.Elem.Size()
-		for i := int64(0); i < t.Count; i++ {
-			if hasPtr(p, a.Add(i*s), t.Elem, live) {
-				return true
-			}
-		}
-		return false
-	case gocore.KindStruct:
-		for _, f := range t.Fields {
-			if hasPtr(p, a.Add(f.Off), f.Type, live) {
-				return true
-			}
-		}
-		return false
-	default:
-		panic("bad")
 	}
 }
 

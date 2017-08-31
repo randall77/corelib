@@ -478,6 +478,8 @@ func (p *Program) findRoots() {
 		DW_OP_consts         = 0x11
 	)
 	d, _ := p.proc.DWARF()
+
+	// Find global variables.
 	r := d.Reader()
 	for e, err := r.Next(); e != nil && err == nil; e, err = r.Next() {
 		if e.Tag != dwarf.TagVariable {
@@ -513,7 +515,7 @@ func (p *Program) findRoots() {
 		})
 	}
 
-	// Find all stack variables.
+	// Find stack variables.
 	type Var struct {
 		name string
 		off  int64
