@@ -3,6 +3,7 @@ package gocore
 import (
 	"debug/dwarf"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/randall77/corelib/core"
@@ -585,18 +586,44 @@ func (p *Program) findRoots() {
 		vars[curfn] = append(vars[curfn], Var{name: name, off: off, typ: p.dwarfMap[dt]})
 	}
 
-	// Get roots from goroutine stacks
+	// Get roots from goroutine stacks.
 	for _, g := range p.goroutines {
 		for _, f := range g.frames {
+			// Start with all pointer slots as unnamed.
+			unnamed := map[core.Address]bool{}
+			for a := range f.live {
+				unnamed[a] = true
+			}
+			// Emit roots for DWARF entries.
 			for _, v := range vars[f.f] {
-				f.roots = append(f.roots, &Root{
+				r := &Root{
 					Name: v.name,
 					Addr: f.max.Add(v.off),
 					Type: v.typ,
 					Live: f.live,
-				})
+				}
+				f.roots = append(f.roots, r)
+				// Remove this variable from the set of unnamed pointers.
+				for a := r.Addr; a < r.Addr.Add(r.Type.Size()); a = a.Add(p.proc.PtrSize()) {
+					delete(unnamed, a)
+				}
 			}
-
+			// Emit roots for unnamed pointer slots in the frame.
+			// Make deterministic by sorting first.
+			s := make([]core.Address, 0, len(unnamed))
+			for a := range unnamed {
+				s = append(s, a)
+			}
+			sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
+			for _, a := range s {
+				r := &Root{
+					Name: "unk",
+					Addr: a,
+					Type: p.runtimeNameMap["unsafe.Pointer"][0],
+					Live: f.live,
+				}
+				f.roots = append(f.roots, r)
+			}
 		}
 	}
 	// TODO: finalizers, defers
