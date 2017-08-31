@@ -441,6 +441,13 @@ func (p *Process) ReadUint8(a Address) uint8 {
 	return buf[0]
 }
 
+// ReadUint16 returns a uint16 read from address a of the inferior.
+func (p *Process) ReadUint16(a Address) uint16 {
+	var buf [2]byte
+	p.ReadAt(buf[:], a)
+	return p.byteOrder.Uint16(buf[:])
+}
+
 // ReadUint32 returns a uint32 read from address a of the inferior.
 func (p *Process) ReadUint32(a Address) uint32 {
 	var buf [4]byte
@@ -453,6 +460,16 @@ func (p *Process) ReadUint64(a Address) uint64 {
 	var buf [8]byte
 	p.ReadAt(buf[:], a)
 	return p.byteOrder.Uint64(buf[:])
+}
+
+// ReadInt8 returns an int8 read from address a of the inferior.
+func (p *Process) ReadInt8(a Address) int8 {
+	return int8(p.ReadUint8(a))
+}
+
+// ReadInt16 returns an int16 read from address a of the inferior.
+func (p *Process) ReadInt16(a Address) int16 {
+	return int16(p.ReadUint16(a))
 }
 
 // ReadInt32 returns an int32 read from address a of the inferior.

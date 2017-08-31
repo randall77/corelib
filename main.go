@@ -368,6 +368,9 @@ func main() {
 			})
 		}
 		fmt.Printf("%x %s\n", x.Addr, typeName(x))
+
+	case "html":
+		serveHtml(c)
 	}
 }
 
