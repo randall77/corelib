@@ -416,6 +416,25 @@ func (p *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			p.typeObject(a.Add(i*n), t.Elem, r, add)
 		}
 	case KindStruct:
+		if strings.HasPrefix(t.name, "hash<") {
+			// Special case - maps have a pointer to the first bucket
+			// but it really types all the buckets (like a slice would).
+			var bPtr core.Address
+			var bTyp *Type
+			var n int64
+			for _, f := range t.Fields {
+				if f.Name == "buckets" {
+					bPtr = p.proc.ReadAddress(a.Add(f.Off))
+					bTyp = f.Type.Elem
+				}
+				if f.Name == "B" {
+					n = int64(1) << p.proc.ReadUint8(a.Add(f.Off))
+				}
+			}
+			add(bPtr, bTyp, n)
+			// TODO: also oldbuckets
+		}
+		// TODO: also special case for channels?
 		for _, f := range t.Fields {
 			p.typeObject(a.Add(f.Off), f.Type, r, add)
 		}
