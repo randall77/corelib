@@ -247,40 +247,140 @@ func runtimeName(dt dwarf.Type) string {
 	}
 }
 
+type typeChunk struct {
+	a core.Address // address in object
+	t *Type        // type
+	r int64        // repeat count
+}
+
+func (c typeChunk) min() core.Address {
+	return c.a
+}
+func (c typeChunk) max() core.Address {
+	return c.a.Add(c.r * c.t.size)
+}
+func (c typeChunk) size() int64 {
+	return c.r * c.t.size
+}
+func (c typeChunk) matchingAlignment(d typeChunk) bool {
+	if c.t != d.t {
+		panic("can't check alignment of differently typed chunks")
+	}
+	if c.a >= d.a {
+		return d.a.Sub(c.a)%c.t.size != 0
+	}
+	return c.a.Sub(d.a)%c.t.size != 0
+}
+
+func (c typeChunk) merge(d typeChunk) typeChunk {
+	if c.t != d.t {
+		panic("can't merge chunks with different types")
+	}
+	if c.a <= d.a {
+		delta := d.a.Sub(c.a)
+		if delta%c.t.size != 0 {
+			panic("can't merge poorly aligned chunks")
+		}
+		return typeChunk{a: c.a, t: c.t, r: d.r + delta/c.t.size}
+	}
+	delta := c.a.Sub(d.a)
+	if delta%c.t.size != 0 {
+		panic("can't merge poorly aligned chunks")
+	}
+	return typeChunk{a: d.a, t: c.t, r: c.r + delta/c.t.size}
+}
+func (c typeChunk) String() string {
+	return fmt.Sprintf("%x[%d]%s", c.a, c.r, c.t)
+}
+
 // typeHeap tries to label all the heap objects with types.
 func (p *Program) typeHeap() {
-	// Set of objects which still need to be scanned.
-	var q []*Object
+	nobj := len(p.objects)
+
+	// Mapping from object index to the type info we have for that object.
+	// Type information is arranged in chunks. Chunks are stored in an
+	// arbitrary order, and are guaranteed to not overlap. If types are
+	// equal, chunks are also guaranteed not to abut.
+	types := make([][]typeChunk, nobj)
+
+	// The common case is that objects will have only one typeChunk.
+	// Allocate storage for one typeChunk per object upfront.
+	typeStore := make([]typeChunk, nobj)
+	for i := 0; i < nobj; i++ {
+		types[i] = typeStore[i:i : i+1]
+	}
+
+	// Typings we know about but haven't scanned yet.
+	var work []typeChunk
 
 	// add records the fact that we know the object at address a has
-	// repeat copies of type t.
-	add := func(a core.Address, t *Type, repeat int64) {
+	// r copies of type t.
+	add := func(a core.Address, t *Type, r int64) {
 		if a == 0 { // nil pointer
 			return
 		}
 		if t == nil {
 			return // TODO: why?
 		}
-		obj, off := p.FindObject(a)
-		if obj == nil { // pointer doesn't point to an object in the Go heap
+		i, _ := p.findObjectIndex(a)
+		if i < 0 { // pointer doesn't point to an object in the Go heap
 			return
 		}
-		if off != 0 {
-			// Ignore interior pointers.
-			// TODO: Maybe we could extract some useful info here?
-			// Keep offset/type pairs for an object + have a merge
-			// rule for those offset/type pairs. For now we just use
-			// the simple offset=0, maximum size typing.
-			return
+		c := typeChunk{a: a, t: t, r: r}
+
+		// Merge the given typing into the chunks we already know.
+		// TODO: this could be O(n) per insert if there are lots of internal pointers.
+		chunks := types[i]
+		newchunks := chunks[:0]
+		addWork := true
+		for _, d := range chunks {
+			if c.max() <= d.min() || c.min() >= d.max() {
+				// c does not overlap with d.
+				if c.t == d.t && (c.max() == d.min() || c.min() == d.max()) {
+					// c and d abut and share the same base type. Merge them.
+					c = c.merge(d)
+					continue
+				}
+				// Keep existing chunk d.
+				newchunks = append(newchunks, d)
+				continue
+			}
+			// There is some overlap. There are a few possibilities:
+			// 1) One is completely contained in the other.
+			// 2) Both are slices of a larger underlying array.
+			// 3) Some unsafe trickery has happened. Non-containing overlap
+			//    can only happen in safe Go via case 2.
+			if c.min() >= d.min() && c.max() <= d.max() {
+				// 1a: c is contained within the existing chunk d.
+				// Note that there can be a type mismatch between c and d,
+				// but we don't care. We use the larger chunk regardless.
+				c = d
+				addWork = false // We've already scanned all of c.
+				continue
+			}
+			if d.min() >= c.min() && d.max() <= c.max() {
+				// 1b: existing chunk d is completely covered by c.
+				continue
+			}
+			if c.t == d.t && c.matchingAlignment(d) {
+				// Union two regions of the same base type. Case 2 above.
+				c = c.merge(d)
+				continue
+			}
+			if c.size() < d.size() {
+				// Keep the larger of the two chunks.
+				c = d
+				addWork = false
+			}
 		}
-		if obj.Type == nil || t.size*repeat > obj.Type.size*obj.Repeat {
-			// New typing is better than the old one.
-			obj.Type = t
-			obj.Repeat = repeat
-			q = append(q, obj)
-			// Note: An object may appear multiple times in q, but
-			// each time it appears means we found a larger type for it.
-			// So it is guaranteed to appear only a finite number of times.
+		// Add new chunk to list of chunks for object.
+		newchunks = append(newchunks, c)
+		types[i] = newchunks
+		// Also arrange to scan the new chunk. Note that if we merged
+		// with an existing chunk (or chunks), those will get rescanned.
+		// Duplicate work, but that's ok. TODO: but could be expensive.
+		if addWork {
+			work = append(work, c)
 		}
 	}
 
@@ -298,13 +398,23 @@ func (p *Program) typeHeap() {
 		}
 	}
 
-	// Propagate typings through the object graph.
-	for len(q) > 0 {
-		obj := q[len(q)-1]
-		q = q[:len(q)-1]
-		for i := int64(0); i < obj.Repeat; i++ {
-			p.typeObject(obj.Addr.Add(i*obj.Type.Size()), obj.Type, p.proc, add)
+	// Propagate typings through the heap.
+	for len(work) > 0 {
+		c := work[len(work)-1]
+		work = work[:len(work)-1]
+		for i := int64(0); i < c.r; i++ {
+			p.typeObject(c.a.Add(i*c.t.size), c.t, p.proc, add)
 		}
+	}
+
+	// Extract types for each object from the result.
+	for i, chunks := range types {
+		x := &p.objects[i]
+		if len(chunks) == 1 && chunks[0].a == x.Addr {
+			x.Type = chunks[0].t
+			x.Repeat = chunks[0].r
+		}
+		// TODO: report something useful for various interior typings.
 	}
 }
 

@@ -129,6 +129,20 @@ func (p *Program) FindObject(a core.Address) (*Object, int64) {
 	return obj, a.Sub(obj.Addr)
 }
 
+func (p *Program) findObjectIndex(a core.Address) (int, int64) {
+	i := sort.Search(len(p.objects), func(i int) bool {
+		return a < p.objects[i].Addr.Add(p.objects[i].Size)
+	})
+	if i == len(p.objects) {
+		return -1, 0
+	}
+	obj := &p.objects[i]
+	if a < obj.Addr {
+		return -1, 0
+	}
+	return i, a.Sub(obj.Addr)
+}
+
 // ForEachEdge calls fn for all heap pointers it finds in x.
 // It calls fn with:
 //   the offset of the pointer slot in x
