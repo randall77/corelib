@@ -127,6 +127,9 @@ type Mapping struct {
 	// This info is just for printing; the data in this source is stale.
 	origF   *os.File
 	origOff int64
+
+	// Contents of f at offset off. Length=max-min.
+	contents []byte
 }
 
 // Min returns the lowest virtual address of the mapping.

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 )
 
 // Core takes the name of a core file and returns a Process that
@@ -51,6 +52,15 @@ func Core(coreFile, base string) (*Process, error) {
 			// TODO: also check origF?
 		} else {
 			p.maps = append(p.maps, m)
+		}
+	}
+
+	// Memory map all the mappings.
+	for _, m := range maps {
+		var err error
+		m.contents, err = syscall.Mmap(int(m.f.Fd()), m.off, int(m.max.Sub(m.min)), syscall.PROT_READ, syscall.MAP_SHARED)
+		if err != nil {
+			return nil, fmt.Errorf("can't memory map %s at %d: %s\n", m.f, m.off, err)
 		}
 	}
 
@@ -117,6 +127,7 @@ func (p *Process) readCore(core *os.File) error {
 			}
 		}
 	}
+
 	return nil
 }
 
@@ -421,6 +432,7 @@ func (p *Process) ReadAt(b []byte, a Address) {
 	if m == nil {
 		panic(fmt.Errorf("address %x is not mapped in the core file", a))
 	}
+
 	n := m.max.Sub(a)
 	if n < int64(len(b)) {
 		// Read range straddles the end of this mapping.
@@ -428,10 +440,7 @@ func (p *Process) ReadAt(b []byte, a Address) {
 		p.ReadAt(b[n:], m.max)
 		b = b[:n]
 	}
-	_, err := m.f.ReadAt(b, m.off+a.Sub(m.min))
-	if err != nil {
-		panic(err)
-	}
+	copy(b, m.contents[a.Sub(m.min):])
 }
 
 // ReadUint8 returns a uint8 read from address a of the inferior.

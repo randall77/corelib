@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime/pprof"
 	"sort"
 	"strconv"
 	"text/tabwriter"
@@ -37,6 +38,7 @@ Flags applicable to all commands:
 
 func main() {
 	base := flag.String("base", "", "root directory to find core dump file references")
+	prof := flag.String("prof", "", "profile file")
 	flag.Parse()
 
 	// Extract command.
@@ -50,6 +52,15 @@ func main() {
 	if cmd == "help" {
 		usage()
 		return
+	}
+
+	if *prof != "" {
+		f, err := os.Create(*prof)
+		if err != nil {
+			panic(err)
+		}
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
 	}
 
 	// All commands other than "help" need a core file.
