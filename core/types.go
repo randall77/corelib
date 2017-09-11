@@ -56,17 +56,19 @@ func (a Address) Align(x int64) Address {
 
 // A Process represents the state of the process that core dumped.
 type Process struct {
-	base      string             // base directory from which files in the core can be found
-	exec      []*os.File         // executables (more than one for shlibs)
-	maps      []*Mapping         // virtual address mappings
-	threads   []*Thread          // os threads (TODO: map from pid?)
-	arch      string             // amd64, ...
-	ptrSize   int64              // 4 or 8
-	byteOrder binary.ByteOrder   //
-	syms      map[string]Address // symbols (could be empty if executable is stripped)
-	symErr    error              // an error encountered while reading symbols
-	dwarf     *dwarf.Data        // debugging info (could be nil)
-	dwarfErr  error              // an error encountered while reading DWARF
+	base         string             // base directory from which files in the core can be found
+	exec         []*os.File         // executables (more than one for shlibs)
+	maps         []*Mapping         // virtual address mappings
+	threads      []*Thread          // os threads (TODO: map from pid?)
+	arch         string             // amd64, ...
+	ptrSize      int64              // 4 or 8
+	byteOrder    binary.ByteOrder   //
+	littleEndian bool               // redundant with byteOrder
+	syms         map[string]Address // symbols (could be empty if executable is stripped)
+	symErr       error              // an error encountered while reading symbols
+	dwarf        *dwarf.Data        // debugging info (could be nil)
+	dwarfErr     error              // an error encountered while reading DWARF
+	pageTable    pageTable4         // fast address->mapping lookups
 }
 
 // Mappings returns a list of virtual memory mappings for p.
@@ -231,4 +233,69 @@ func (p Perm) String() string {
 		b = append(b, "None")
 	}
 	return strings.Join(b, "|")
+}
+
+// We assume that OS pages are at least 4K in size. So every mapping
+// starts and ends at a multiple of 4K.
+// We divide the other 64-12 = 52 bits into levels in a page table.
+type pageTable0 [1 << 10]*Mapping
+type pageTable1 [1 << 10]*pageTable0
+type pageTable2 [1 << 10]*pageTable1
+type pageTable3 [1 << 10]*pageTable2
+type pageTable4 [1 << 12]*pageTable3
+
+func (p *Process) findMapping(a Address) *Mapping {
+	t3 := p.pageTable[a>>52]
+	if t3 == nil {
+		return nil
+	}
+	t2 := t3[a>>42%(1<<10)]
+	if t2 == nil {
+		return nil
+	}
+	t1 := t2[a>>32%(1<<10)]
+	if t1 == nil {
+		return nil
+	}
+	t0 := t1[a>>22%(1<<10)]
+	if t0 == nil {
+		return nil
+	}
+	return t0[a>>12%(1<<10)]
+}
+
+func (p *Process) addMapping(m *Mapping) {
+	if m.min%(1<<12) != 0 {
+		panic("pages aren't a multiple of 4096")
+	}
+	if m.max%(1<<12) != 0 {
+		panic("pages aren't a multiple of 4096")
+	}
+	for a := m.min; a < m.max; a += 1 << 12 {
+		i3 := a >> 52
+		t3 := p.pageTable[i3]
+		if t3 == nil {
+			t3 = new(pageTable3)
+			p.pageTable[i3] = t3
+		}
+		i2 := a >> 42 % (1 << 10)
+		t2 := t3[i2]
+		if t2 == nil {
+			t2 = new(pageTable2)
+			t3[i2] = t2
+		}
+		i1 := a >> 32 % (1 << 10)
+		t1 := t2[i1]
+		if t1 == nil {
+			t1 = new(pageTable1)
+			t2[i1] = t1
+		}
+		i0 := a >> 22 % (1 << 10)
+		t0 := t1[i0]
+		if t0 == nil {
+			t0 = new(pageTable0)
+			t1[i0] = t0
+		}
+		t0[a>>12%(1<<10)] = m
+	}
 }

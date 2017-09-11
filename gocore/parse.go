@@ -3,7 +3,6 @@ package gocore
 import (
 	"debug/dwarf"
 	"fmt"
-	"sort"
 
 	"github.com/randall77/corelib/core"
 )
@@ -100,11 +99,13 @@ func (p *Program) readSpans() {
 	spanTableStart := mheap.Field("spans").SlicePtr().Address()
 	spanTableEnd := spanTableStart.Add(mheap.Field("spans").SliceCap() * p.proc.PtrSize())
 	arenaStart := core.Address(mheap.Field("arena_start").Uintptr())
+	arenaUsed := core.Address(mheap.Field("arena_used").Uintptr())
 	arenaEnd := core.Address(mheap.Field("arena_end").Uintptr())
 	bitmapEnd := core.Address(mheap.Field("bitmap").Uintptr())
 	bitmapStart := bitmapEnd.Add(-int64(mheap.Field("bitmap_mapped").Uintptr()))
 
 	p.arenaStart = arenaStart
+	p.arenaUsed = arenaUsed
 	p.bitmapEnd = bitmapEnd
 
 	var all int64
@@ -157,6 +158,10 @@ func (p *Program) readSpans() {
 	spanFree := uint8(p.rtConstants["_MSpanFree"])
 
 	// Process spans.
+	if pageSize%512 != 0 {
+		panic("page size not a multiple of 512")
+	}
+	p.heapInfo = make([]heapInfo, (p.arenaUsed-p.arenaStart)/512)
 	allspans := mheap.Field("allspans")
 	var allSpanSize int64
 	var freeSpanSize int64
@@ -199,7 +204,10 @@ func (p *Program) readSpans() {
 				}
 			}
 			spanRoundSize += spanSize - n*elemSize
-			p.spans = append(p.spans, span{min: min, max: max, size: elemSize})
+			for a := min; a < max; a += 512 {
+				p.heapInfo[(a.Sub(p.arenaStart))/512] = heapInfo{base: min, size: elemSize, firstIdx: -1}
+			}
+
 		case spanFree:
 			freeSpanSize += spanSize
 		case spanDead:
@@ -249,11 +257,6 @@ func (p *Program) readSpans() {
 		}
 	}
 	check(p.stats)
-
-	// sort spans for later binary search.
-	sort.Slice(p.spans, func(i, j int) bool {
-		return p.spans[i].min < p.spans[j].min
-	})
 }
 
 func (p *Program) readModules() {

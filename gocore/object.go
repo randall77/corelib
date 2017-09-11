@@ -11,26 +11,31 @@ import (
 func (p *Program) readObjects() {
 	ptrSize := p.proc.PtrSize()
 
-	// mark contains the Addr for all objects currently in p.objects.
-	mark := map[core.Address]struct{}{}
-
 	// Number of objects in p.objects that have been scanned.
 	n := 0
 
 	// Function to call when we find a new pointer.
 	add := func(x core.Address) {
-		if x == 0 { // nil pointer
+		if x == 0 || x < p.arenaStart || x >= p.arenaUsed { // not in heap
 			return
 		}
-		s := p.findSpan(x)
-		if s.size == 0 { // not in heap
+		i := x.Sub(p.arenaStart) / 512
+		s := &p.heapInfo[i]
+		if s.base == 0 { // not in a valid span
+			// TODO: probably a runtime/compiler error?
 			return
 		}
-		x = s.min.Add(x.Sub(s.min) / s.size * s.size)
-		if _, ok := mark[x]; ok { // already found
+		// Round down to object start.
+		x = s.base.Add(x.Sub(s.base) / s.size * s.size)
+		// Find mark bit
+		off := uint64(x.Sub(p.arenaStart))
+		j := off / 512
+		s = &p.heapInfo[j]
+		b := off % 512 / 8
+		if s.mark&(uint64(1)<<b) != 0 { // already found
 			return
 		}
-		mark[x] = struct{}{}
+		s.mark |= uint64(1) << b
 		p.objects = append(p.objects, Object{Addr: x, Size: s.size})
 	}
 
@@ -74,30 +79,28 @@ func (p *Program) readObjects() {
 		}
 	}
 
-	// Sort objects for later binary search by address.
+	// Sort objects for later search in increasing address order.
 	sort.Slice(p.objects, func(i, j int) bool {
 		return p.objects[i].Addr < p.objects[j].Addr
 	})
+
+	// Initialize firstIdx fields in the heapInfo, for fast
+	// address->object lookups.
+	for i := len(p.objects) - 1; i >= 0; i-- {
+		x := p.objects[i]
+		// last byte
+		p.heapInfo[x.Addr.Add(x.Size-1).Sub(p.arenaStart)/512].firstIdx = i
+		// first byte, plus every 512th byte
+		for j := int64(0); j < x.Size; j += 512 {
+			p.heapInfo[x.Addr.Add(j).Sub(p.arenaStart)/512].firstIdx = i
+		}
+	}
 
 	// Build array-of-pointers for easy iteration over objects.
 	p.objPtrs = make([]*Object, len(p.objects))
 	for i := range p.objects {
 		p.objPtrs[i] = &p.objects[i]
 	}
-}
-
-func (p *Program) findSpan(a core.Address) span {
-	i := sort.Search(len(p.spans), func(i int) bool {
-		return p.spans[i].max > a
-	})
-	if i == len(p.spans) {
-		return span{}
-	}
-	s := p.spans[i]
-	if a >= s.min {
-		return s
-	}
-	return span{}
 }
 
 // isPtr reports whether the inferior at address a contains a pointer.
@@ -114,33 +117,32 @@ func (p *Program) isPtr(a core.Address) bool {
 
 // FindObject finds the object containing a.  Returns that object and the offset within
 // that object to which a points.
-// Returns nil if a doesn't point to a live heap object.
+// Returns nil,0 if a doesn't point to a live heap object.
 func (p *Program) FindObject(a core.Address) (*Object, int64) {
-	i := sort.Search(len(p.objects), func(i int) bool {
-		return a < p.objects[i].Addr.Add(p.objects[i].Size)
-	})
-	if i == len(p.objects) {
+	i, off := p.findObjectIndex(a)
+	if i < 0 {
 		return nil, 0
 	}
-	obj := &p.objects[i]
-	if a < obj.Addr {
-		return nil, 0
-	}
-	return obj, a.Sub(obj.Addr)
+	return &p.objects[i], off
 }
 
 func (p *Program) findObjectIndex(a core.Address) (int, int64) {
-	i := sort.Search(len(p.objects), func(i int) bool {
-		return a < p.objects[i].Addr.Add(p.objects[i].Size)
-	})
-	if i == len(p.objects) {
+	if a < p.arenaStart || a >= p.arenaUsed {
 		return -1, 0
 	}
-	obj := &p.objects[i]
-	if a < obj.Addr {
+	i := p.heapInfo[a.Sub(p.arenaStart)/512].firstIdx
+	if i < 0 {
 		return -1, 0
 	}
-	return i, a.Sub(obj.Addr)
+	// Linear search within 512-byte heap region.
+	// Skip over objects completely less than a.
+	for i < len(p.objects) && p.objects[i].Addr.Add(p.objects[i].Size) <= a {
+		i++
+	}
+	if i == len(p.objects) || a < p.objects[i].Addr {
+		return -1, 0
+	}
+	return i, a.Sub(p.objects[i].Addr)
 }
 
 // ForEachEdge calls fn for all heap pointers it finds in x.

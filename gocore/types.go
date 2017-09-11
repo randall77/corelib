@@ -10,9 +10,10 @@ type Program struct {
 	proc *core.Process
 
 	arenaStart core.Address
+	arenaUsed  core.Address
 	bitmapEnd  core.Address
 
-	spans []span
+	heapInfo []heapInfo
 
 	goroutines []*Goroutine
 
@@ -251,14 +252,6 @@ type Object struct {
 	Repeat int64 // Known repeat count for Type
 }
 
-// A span is a set of addresses that contain heap objects.
-// Note: We record only heap spans. The spans list does not include stack spans.
-type span struct {
-	min  core.Address
-	max  core.Address
-	size int64 // size of objects in span
-}
-
 // A Stats struct is the node of a tree representing the entire memory
 // usage of the Go program. Children of a node break its usage down
 // by category.
@@ -287,4 +280,12 @@ type structInfo struct {
 type fieldInfo struct {
 	off int64
 	typ string
+}
+
+// Information for 512 bytes of heap.
+type heapInfo struct {
+	base     core.Address // start of the span containing this heap region
+	size     int64        // size of objects in the span
+	mark     uint64       // 64 mark bits, one for every 8 bytes
+	firstIdx int          // the index of the first object that has any overlap with this region
 }

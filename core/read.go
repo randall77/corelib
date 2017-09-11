@@ -2,6 +2,7 @@ package core
 
 import (
 	"debug/elf"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,12 +35,10 @@ func Core(coreFile, base string) (*Process, error) {
 		}
 	}
 
-	// Sort mappings.
+	// Sort then merge mappings, just to clean up a bit.
 	sort.Slice(p.maps, func(i, j int) bool {
 		return p.maps[i].min < p.maps[j].min
 	})
-
-	// Merge mappings, just to clean up a bit.
 	maps := p.maps[1:]
 	p.maps = p.maps[:1]
 	for _, m := range maps {
@@ -62,6 +61,11 @@ func Core(coreFile, base string) (*Process, error) {
 		if err != nil {
 			return nil, fmt.Errorf("can't memory map %s at %d: %s\n", m.f, m.off, err)
 		}
+	}
+
+	// Build page table for mapping lookup.
+	for _, m := range maps {
+		p.addMapping(m)
 	}
 
 	return p, nil
@@ -110,6 +114,11 @@ func (p *Process) readCore(core *os.File) error {
 		return fmt.Errorf("unknown arch %s\n", e.Machine)
 	}
 	p.byteOrder = e.ByteOrder
+	// We also compute explicitly what byte order the inferior is.
+	// Just using p.byteOrder to decode fields makes any arguments passed to it
+	// escape to the heap.  We use explicit binary.{Little,Big}Endian.UintXX
+	// calls when we want to avoid heap-allocating the buffer.
+	p.littleEndian = e.ByteOrder.String() == "LittleEndian"
 
 	// Load virtual memory mappings.
 	for _, prog := range e.Progs {
@@ -409,38 +418,24 @@ func (p *Process) readExec() error {
 	return nil
 }
 
-func (p *Process) findMapping(a Address) *Mapping {
-	i := sort.Search(len(p.maps), func(i int) bool {
-		return p.maps[i].max > a
-	})
-	if i == len(p.maps) {
-		return nil
-	}
-	m := p.maps[i]
-	if a >= m.min {
-		return m
-	}
-	return nil
-}
-
 // All the Read* functions below will panic if something goes wrong.
 
 // ReadAt reads len(b) bytes at address a in the inferior
 // and stores them in b.
 func (p *Process) ReadAt(b []byte, a Address) {
-	m := p.findMapping(a)
-	if m == nil {
-		panic(fmt.Errorf("address %x is not mapped in the core file", a))
+	for {
+		m := p.findMapping(a)
+		if m == nil {
+			panic(fmt.Errorf("address %x is not mapped in the core file", a))
+		}
+		n := copy(b, m.contents[a.Sub(m.min):])
+		if n == len(b) {
+			return
+		}
+		// Modify request to get data from the next mapping.
+		b = b[n:]
+		a = a.Add(int64(n))
 	}
-
-	n := m.max.Sub(a)
-	if n < int64(len(b)) {
-		// Read range straddles the end of this mapping.
-		// Issue a second request for the tail of the read.
-		p.ReadAt(b[n:], m.max)
-		b = b[:n]
-	}
-	copy(b, m.contents[a.Sub(m.min):])
 }
 
 // ReadUint8 returns a uint8 read from address a of the inferior.
@@ -454,21 +449,30 @@ func (p *Process) ReadUint8(a Address) uint8 {
 func (p *Process) ReadUint16(a Address) uint16 {
 	var buf [2]byte
 	p.ReadAt(buf[:], a)
-	return p.byteOrder.Uint16(buf[:])
+	if p.littleEndian {
+		return binary.LittleEndian.Uint16(buf[:])
+	}
+	return binary.BigEndian.Uint16(buf[:])
 }
 
 // ReadUint32 returns a uint32 read from address a of the inferior.
 func (p *Process) ReadUint32(a Address) uint32 {
 	var buf [4]byte
 	p.ReadAt(buf[:], a)
-	return p.byteOrder.Uint32(buf[:])
+	if p.littleEndian {
+		return binary.LittleEndian.Uint32(buf[:])
+	}
+	return binary.BigEndian.Uint32(buf[:])
 }
 
 // ReadUint64 returns a uint64 read from address a of the inferior.
 func (p *Process) ReadUint64(a Address) uint64 {
 	var buf [8]byte
 	p.ReadAt(buf[:], a)
-	return p.byteOrder.Uint64(buf[:])
+	if p.littleEndian {
+		return binary.LittleEndian.Uint64(buf[:])
+	}
+	return binary.BigEndian.Uint64(buf[:])
 }
 
 // ReadInt8 returns an int8 read from address a of the inferior.
