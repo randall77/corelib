@@ -30,18 +30,7 @@ func serveHtml(c *gocore.Program) {
 			return
 		}
 
-		fmt.Fprintf(w, "<style>\n")
-		fmt.Fprintf(w, "table, th, td {\n")
-		fmt.Fprintf(w, "    border: 1px solid black;\n")
-		fmt.Fprintf(w, "    border-collapse: collapse;\n")
-		fmt.Fprintf(w, "    align: left;\n")
-		fmt.Fprintf(w, "}\n")
-		fmt.Fprintf(w, "table, th, td {\n")
-		fmt.Fprintf(w, "    padding: 2px;\n")
-		fmt.Fprintf(w, "}\n")
-		fmt.Fprintf(w, "tr:hover {background-color: #f5f5f5}\n")
-		fmt.Fprintf(w, "</style>\n")
-
+		tableStyle(w)
 		fmt.Fprintf(w, "<h1>object %x</h1>\n", x.Addr)
 		fmt.Fprintf(w, "<h3>%s</h3>\n", html.EscapeString(typeName(x)))
 		fmt.Fprintf(w, "<h3>%d bytes</h3>\n", x.Size)
@@ -82,6 +71,17 @@ func serveHtml(c *gocore.Program) {
 		}
 		fmt.Fprintf(w, "</table>\n")
 	})
+	http.HandleFunc("/goroutines", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "<h1>goroutines</h1>\n")
+		tableStyle(w)
+		fmt.Fprintf(w, "<table>\n")
+		fmt.Fprintf(w, "<tr><th align=left>goroutine</th><th align=left>top of stack</th></tr>\n")
+		for _, g := range c.Goroutines() {
+			fmt.Fprintf(w, "<tr><td><a href=\"goroutine?g=%x\">%x</a></td><td>%s</td></tr>\n", g.Addr(), g.Addr(), g.Frames()[0].Func().Name())
+		}
+		fmt.Fprintf(w, "</table>\n")
+		// TODO: export goroutine state (runnable, running, syscall, ...) and print it here.
+	})
 	http.HandleFunc("/goroutine", func(w http.ResponseWriter, r *http.Request) {
 		gs, ok := r.URL.Query()["g"]
 		if !ok || len(gs) != 1 {
@@ -106,18 +106,7 @@ func serveHtml(c *gocore.Program) {
 			return
 		}
 
-		fmt.Fprintf(w, "<style>\n")
-		fmt.Fprintf(w, "table, th, td {\n")
-		fmt.Fprintf(w, "    border: 1px solid black;\n")
-		fmt.Fprintf(w, "    border-collapse: collapse;\n")
-		fmt.Fprintf(w, "    align: left;\n")
-		fmt.Fprintf(w, "}\n")
-		fmt.Fprintf(w, "table, th, td {\n")
-		fmt.Fprintf(w, "    padding: 2px;\n")
-		fmt.Fprintf(w, "}\n")
-		fmt.Fprintf(w, "tr:hover {background-color: #f5f5f5}\n")
-		fmt.Fprintf(w, "</style>\n")
-
+		tableStyle(w)
 		fmt.Fprintf(w, "<h1>goroutine %x</h1>\n", g.Addr())
 		fmt.Fprintf(w, "<h3>%s</h3>\n", htmlPointer(c, g.Addr()))
 		fmt.Fprintf(w, "<h3>%d bytes of stack</h3>\n", g.Stack())
@@ -131,6 +120,35 @@ func serveHtml(c *gocore.Program) {
 			}
 			fmt.Fprintf(w, "</table>\n")
 		}
+	})
+	http.HandleFunc("/globals", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "<h1>globals</h1>\n")
+		tableStyle(w)
+		fmt.Fprintf(w, "<table>\n")
+		fmt.Fprintf(w, "<tr><th align=left>field</th><th align=left>type</th><th align=left>value</th></tr>\n")
+		for _, r := range c.Globals() {
+			htmlObject(w, c, r.Name, r.Addr, r.Type, r.Live)
+		}
+		fmt.Fprintf(w, "</table>\n")
+	})
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "<h1>core dump viewer</h1>\n")
+		fmt.Fprintf(w, "go version %s<br/>\n", c.BuildVersion())
+		fmt.Fprintf(w, "<a href=\"goroutines\">goroutines</a><br/>\n")
+		fmt.Fprintf(w, "<a href=\"globals\">globals</a><br/>\n")
+		tableStyle(w)
+		fmt.Fprintf(w, "<table>\n")
+		fmt.Fprintf(w, "<tr><th align=left>category</th><th align=left>bytes</th><th align=left>percent</th></tr>\n")
+		all := c.Stats().Size
+		var p func(*gocore.Stats, string)
+		p = func(s *gocore.Stats, prefix string) {
+			fmt.Fprintf(w, "<tr><td>%s%s</td><td align=right>%d</td><td align=right>%.2f</td></tr>\n", prefix, s.Name, s.Size, float64(s.Size)/float64(all)*100)
+			for _, c := range s.Children {
+				p(c, prefix+"..")
+			}
+		}
+		p(c.Stats(), "")
+		fmt.Fprintf(w, "</table>\n")
 	})
 	fmt.Println("serving on :8080")
 	http.ListenAndServe(":8080", nil)
@@ -260,4 +278,19 @@ func htmlPointerAt(c *gocore.Program, a core.Address, live map[core.Address]bool
 		return "<text style=\"color:LightGray\">dead</text>"
 	}
 	return htmlPointer(c, c.Process().ReadAddress(a))
+}
+
+func tableStyle(w http.ResponseWriter) {
+	fmt.Fprintf(w, "<style>\n")
+	fmt.Fprintf(w, "table, th, td {\n")
+	fmt.Fprintf(w, "    border: 1px solid black;\n")
+	fmt.Fprintf(w, "    border-collapse: collapse;\n")
+	fmt.Fprintf(w, "    align: left;\n")
+	fmt.Fprintf(w, "}\n")
+	fmt.Fprintf(w, "table, th, td {\n")
+	fmt.Fprintf(w, "    padding: 2px;\n")
+	fmt.Fprintf(w, "}\n")
+	fmt.Fprintf(w, "tr:hover {background-color: #f5f5f5}\n")
+	fmt.Fprintf(w, "</style>\n")
+
 }
