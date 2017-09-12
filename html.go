@@ -50,15 +50,15 @@ func serveHtml(c *gocore.Program) {
 		fmt.Fprintf(w, "<tr><th align=left>field</th><th align=left>type</th><th align=left>value</th></tr>\n")
 		var end int64
 		if x.Type != nil {
-			n := x.Size / x.Type.Size()
+			n := x.Size / x.Type.Size
 			if n > 1 {
 				for i := int64(0); i < n; i++ {
-					htmlObject(w, c, fmt.Sprintf("[%d]", i), x.Addr.Add(i*x.Type.Size()), x.Type)
+					htmlObject(w, c, fmt.Sprintf("[%d]", i), x.Addr.Add(i*x.Type.Size), x.Type)
 				}
 			} else {
 				htmlObject(w, c, "", x.Addr, x.Type)
 			}
-			end = n * x.Type.Size()
+			end = n * x.Type.Size
 		}
 		for i := end; i < x.Size; i += c.Process().PtrSize() {
 			fmt.Fprintf(w, "<tr><td>f%d</td><td>?</td><td>", i)
@@ -80,7 +80,7 @@ func htmlObject(w http.ResponseWriter, c *gocore.Program, name string, a core.Ad
 		fmt.Fprintf(w, "<tr><td>%s</td><td>%s</td><td>%t</td></tr>\n", name, html.EscapeString(t.String()), v)
 	case gocore.KindInt:
 		var v int64
-		switch t.Size() {
+		switch t.Size {
 		case 1:
 			v = int64(c.Process().ReadInt8(a))
 		case 2:
@@ -93,7 +93,7 @@ func htmlObject(w http.ResponseWriter, c *gocore.Program, name string, a core.Ad
 		fmt.Fprintf(w, "<tr><td>%s</td><td>%s</td><td>%d</td></tr>\n", name, html.EscapeString(t.String()), v)
 	case gocore.KindUint:
 		var v uint64
-		switch t.Size() {
+		switch t.Size {
 		case 1:
 			v = uint64(c.Process().ReadUint8(a))
 		case 2:
@@ -106,7 +106,7 @@ func htmlObject(w http.ResponseWriter, c *gocore.Program, name string, a core.Ad
 		fmt.Fprintf(w, "<tr><td>%s</td><td>%s</td><td>%d</td></tr>\n", name, html.EscapeString(t.String()), v)
 	case gocore.KindFloat:
 		var v float64
-		switch t.Size() {
+		switch t.Size {
 		case 4:
 			v = float64(math.Float32frombits(c.Process().ReadUint32(a)))
 		default:
@@ -115,7 +115,7 @@ func htmlObject(w http.ResponseWriter, c *gocore.Program, name string, a core.Ad
 		fmt.Fprintf(w, "<tr><td>%s</td><td>%s</td><td>%f</td></tr>\n", name, html.EscapeString(t.String()), v)
 	case gocore.KindComplex:
 		var v complex128
-		switch t.Size() {
+		switch t.Size {
 		case 8:
 			v = complex128(complex(
 				math.Float32frombits(c.Process().ReadUint32(a)),
@@ -158,7 +158,7 @@ func htmlObject(w http.ResponseWriter, c *gocore.Program, name string, a core.Ad
 		fmt.Fprintf(w, "<tr><td>%s.len</td><td>int</td><td>%d</td></tr>\n", name, c.Process().ReadInt(a.Add(c.Process().PtrSize())))
 		fmt.Fprintf(w, "<tr><td>%s.cap</td><td>int</td><td>%d</td></tr>\n", name, c.Process().ReadInt(a.Add(c.Process().PtrSize()*2)))
 	case gocore.KindArray:
-		s := t.Elem.Size()
+		s := t.Elem.Size
 		n := t.Count
 		if n*s > 16384 {
 			n = (16384 + s - 1) / s
@@ -166,7 +166,7 @@ func htmlObject(w http.ResponseWriter, c *gocore.Program, name string, a core.Ad
 		for i := int64(0); i < n; i++ {
 			htmlObject(w, c, fmt.Sprintf("%s[%d]", name, i), a.Add(i*s), t.Elem)
 		}
-		if n*s != t.Size() {
+		if n*s != t.Size {
 			fmt.Fprintf(w, "<tr><td>...</td><td>...</td><td>...</td></tr>\n")
 		}
 	case gocore.KindStruct:

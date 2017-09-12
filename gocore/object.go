@@ -205,7 +205,7 @@ func edges1(p *Program, r *Root, off int64, t *Type, fn func(int64, *Object, int
 			}
 		}
 	case KindArray:
-		s := t.Elem.Size()
+		s := t.Elem.Size
 		for i := int64(0); i < t.Count; i++ {
 			if !edges1(p, r, off+i*s, t.Elem, fn) {
 				return false

@@ -26,7 +26,7 @@ func (p *Program) readDWARFTypes() {
 			if size < 0 { // Fix for issue 21097.
 				size = dwarfSize(dt, p.proc.PtrSize())
 			}
-			t := &Type{name: gocoreName(dt), size: size}
+			t := &Type{name: gocoreName(dt), Size: size}
 			p.types = append(p.types, t)
 			p.dwarfMap[dt] = t
 		}
@@ -257,19 +257,19 @@ func (c typeChunk) min() core.Address {
 	return c.a
 }
 func (c typeChunk) max() core.Address {
-	return c.a.Add(c.r * c.t.size)
+	return c.a.Add(c.r * c.t.Size)
 }
 func (c typeChunk) size() int64 {
-	return c.r * c.t.size
+	return c.r * c.t.Size
 }
 func (c typeChunk) matchingAlignment(d typeChunk) bool {
 	if c.t != d.t {
 		panic("can't check alignment of differently typed chunks")
 	}
 	if c.a >= d.a {
-		return d.a.Sub(c.a)%c.t.size != 0
+		return d.a.Sub(c.a)%c.t.Size != 0
 	}
-	return c.a.Sub(d.a)%c.t.size != 0
+	return c.a.Sub(d.a)%c.t.Size != 0
 }
 
 func (c typeChunk) merge(d typeChunk) typeChunk {
@@ -278,16 +278,16 @@ func (c typeChunk) merge(d typeChunk) typeChunk {
 	}
 	if c.a <= d.a {
 		delta := d.a.Sub(c.a)
-		if delta%c.t.size != 0 {
+		if delta%c.t.Size != 0 {
 			panic("can't merge poorly aligned chunks")
 		}
-		return typeChunk{a: c.a, t: c.t, r: d.r + delta/c.t.size}
+		return typeChunk{a: c.a, t: c.t, r: d.r + delta/c.t.Size}
 	}
 	delta := c.a.Sub(d.a)
-	if delta%c.t.size != 0 {
+	if delta%c.t.Size != 0 {
 		panic("can't merge poorly aligned chunks")
 	}
-	return typeChunk{a: d.a, t: c.t, r: c.r + delta/c.t.size}
+	return typeChunk{a: d.a, t: c.t, r: c.r + delta/c.t.Size}
 }
 func (c typeChunk) String() string {
 	return fmt.Sprintf("%x[%d]%s", c.a, c.r, c.t)
@@ -403,7 +403,7 @@ func (p *Program) typeHeap() {
 		c := work[len(work)-1]
 		work = work[:len(work)-1]
 		for i := int64(0); i < c.r; i++ {
-			p.typeObject(c.a.Add(i*c.t.size), c.t, p.proc, add)
+			p.typeObject(c.a.Add(i*c.t.Size), c.t, p.proc, add)
 		}
 	}
 
@@ -472,7 +472,7 @@ func (p *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			}
 			if dt.Kind == KindStruct {
 				for _, f := range dt.Fields {
-					if f.Type.Size() != 0 {
+					if f.Type.Size != 0 {
 						dt = f.Type
 						goto findptr
 					}
@@ -513,7 +513,7 @@ func (p *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		}
 		ft := f.closure
 		if ft == nil {
-			ft = &Type{name: "closure for " + f.name, size: ptrSize, Kind: KindPtr}
+			ft = &Type{name: "closure for " + f.name, Size: ptrSize, Kind: KindPtr}
 			p.types = append(p.types, ft)
 			// For now, treat a closure like an unsafe.Pointer.
 			// TODO: better value for size?
@@ -521,7 +521,7 @@ func (p *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		}
 		p.typeObject(closure, ft, r, add)
 	case KindArray:
-		n := t.Elem.size
+		n := t.Elem.Size
 		for i := int64(0); i < t.Count; i++ {
 			p.typeObject(a.Add(i*n), t.Elem, r, add)
 		}
@@ -733,7 +733,7 @@ func (p *Program) findRoots() {
 				}
 				f.roots = append(f.roots, r)
 				// Remove this variable from the set of unnamed pointers.
-				for a := r.Addr; a < r.Addr.Add(r.Type.Size()); a = a.Add(p.proc.PtrSize()) {
+				for a := r.Addr; a < r.Addr.Add(r.Type.Size); a = a.Add(p.proc.PtrSize()) {
 					delete(unnamed, a)
 				}
 			}

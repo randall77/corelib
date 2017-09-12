@@ -130,7 +130,18 @@ func main() {
 		for _, g := range c.Goroutines() {
 			fmt.Printf("G stacksize=%x\n", g.Stack())
 			for _, f := range g.Frames() {
-				fmt.Printf("  %016x %016x %s+0x%x\n", f.Min(), f.Max(), f.Func().Name(), f.Offset())
+				pc := f.PC()
+				entry := f.Func().Entry()
+				var adj string
+				switch {
+				case pc == entry:
+					adj = ""
+				case pc < entry:
+					adj = fmt.Sprintf("-%d", entry.Sub(pc))
+				default:
+					adj = fmt.Sprintf("+%d", pc.Sub(entry))
+				}
+				fmt.Printf("  %016x %016x %s%s\n", f.Min(), f.Max(), f.Func().Name(), adj)
 			}
 		}
 	case "histogram":
@@ -148,7 +159,7 @@ func main() {
 				name = fmt.Sprintf("unk%d", obj.Size)
 			} else {
 				name = obj.Type.String()
-				n := obj.Size / obj.Type.Size()
+				n := obj.Size / obj.Type.Size
 				if n > 1 {
 					if obj.Repeat < n {
 						name = fmt.Sprintf("[%d+%d?]%s", obj.Repeat, n-obj.Repeat, name)
@@ -391,7 +402,7 @@ func typeName(x *gocore.Object) string {
 		return fmt.Sprintf("unk%d", x.Size)
 	}
 	name := x.Type.String()
-	n := x.Size / x.Type.Size()
+	n := x.Size / x.Type.Size
 	if n > 1 {
 		if x.Repeat < n {
 			name = fmt.Sprintf("[%d+%d?]%s", x.Repeat, n-x.Repeat, name)
@@ -407,8 +418,8 @@ func fieldName(x *gocore.Object, off int64) string {
 	if x.Type == nil {
 		return fmt.Sprintf("f%d", off)
 	}
-	n := x.Size / x.Type.Size()
-	i := off / x.Type.Size()
+	n := x.Size / x.Type.Size
+	i := off / x.Type.Size
 	if i == 0 && x.Repeat == 1 {
 		// Probably a singleton object, no need for array notation.
 		return typeFieldName(x.Type, off)
@@ -422,7 +433,7 @@ func fieldName(x *gocore.Object, off int64) string {
 		// Past the known repeat section, add a ? because we're not sure about the type.
 		q = "?"
 	}
-	return fmt.Sprintf("[%d]%s%s", i, typeFieldName(x.Type, off-i*x.Type.Size()), q)
+	return fmt.Sprintf("[%d]%s%s", i, typeFieldName(x.Type, off-i*x.Type.Size), q)
 }
 
 // typeFieldName returns the name of the field at offset off in t.
@@ -441,17 +452,17 @@ func typeFieldName(t *gocore.Type, off int64) string {
 		if off == 0 {
 			return ".ptr"
 		}
-		if off <= t.Size()/2 {
+		if off <= t.Size/2 {
 			return ".len"
 		}
 		return ".cap"
 	case gocore.KindArray:
-		s := t.Elem.Size()
+		s := t.Elem.Size
 		i := off / s
 		return fmt.Sprintf("[%d]", i) + typeFieldName(t.Elem, off-i*s)
 	case gocore.KindStruct:
 		for _, f := range t.Fields {
-			if f.Off <= off && off < f.Off+f.Type.Size() {
+			if f.Off <= off && off < f.Off+f.Type.Size {
 				return "." + f.Name + typeFieldName(f.Type, off-f.Off)
 			}
 		}

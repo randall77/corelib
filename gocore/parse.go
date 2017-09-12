@@ -320,7 +320,7 @@ func (t *Type) ptrs1(s []int64, off int64) []int64 {
 	case KindPtr, KindFunc, KindSlice, KindString:
 		s = append(s, off)
 	case KindIface, KindEface:
-		s = append(s, off, off+t.size/2)
+		s = append(s, off, off+t.Size/2)
 	case KindArray:
 		if t.Count > 10000 {
 			// TODO: fix this. Have a nopointers field?
@@ -328,7 +328,7 @@ func (t *Type) ptrs1(s []int64, off int64) []int64 {
 		}
 		for i := int64(0); i < t.Count; i++ {
 			s = t.Elem.ptrs1(s, off)
-			off += t.Elem.size
+			off += t.Elem.Size
 		}
 	case KindStruct:
 		for _, f := range t.Fields {
@@ -398,7 +398,7 @@ func (p *Program) runtimeType2Type(a core.Address) *Type {
 	// It must match name, size, and pointer bits.
 	var candidates []*Type
 	for _, t := range p.runtimeNameMap[name] {
-		if size == t.size && equal(ptrs, t.ptrs()) {
+		if size == t.Size && equal(ptrs, t.ptrs()) {
 			candidates = append(candidates, t)
 		}
 	}
@@ -412,9 +412,9 @@ func (p *Program) runtimeType2Type(a core.Address) *Type {
 		t = candidates[0]
 	} else {
 		// There's no corresponding DWARF type.  Make our own.
-		t = &Type{name: name, size: size, Kind: KindStruct}
+		t = &Type{name: name, Size: size, Kind: KindStruct}
 		p.types = append(p.types, t)
-		n := t.size / ptrSize
+		n := t.Size / ptrSize
 
 		// Types to use for ptr/nonptr fields of runtime types which
 		// have no corresponding DWARF type.
@@ -437,7 +437,7 @@ func (p *Program) runtimeType2Type(a core.Address) *Type {
 			})
 
 		}
-		if t.size%ptrSize != 0 {
+		if t.Size%ptrSize != 0 {
 			// TODO: tail of <ptrSize data.
 		}
 	}
@@ -620,7 +620,7 @@ func (p *Program) readFrame(sp, pc core.Address) *Frame {
 	size := f.frameSize.find(off)
 	size += p.proc.PtrSize() // TODO: on amd64, the pushed return address
 
-	frame := &Frame{f: f, off: off, min: sp, max: sp.Add(size)}
+	frame := &Frame{f: f, pc: pc, min: sp, max: sp.Add(size)}
 
 	// Find live ptrs in locals
 	live := map[core.Address]bool{}

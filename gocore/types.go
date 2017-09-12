@@ -111,7 +111,7 @@ func (g *Goroutine) Frames() []*Frame {
 
 type Frame struct {
 	f        *Func        // function whose activation record this frame is
-	off      int64        // offset of pc in this function
+	pc       core.Address // resumption point
 	min, max core.Address // extent of stack frame
 
 	// Set of locations that contain a live pointer. Note that this set
@@ -129,15 +129,22 @@ func (f *Frame) Func() *Func {
 	return f.f
 }
 
+// Min returns the minimum address of this frame.
 func (f *Frame) Min() core.Address {
 	return f.min
 }
+
+// Max returns the maximum address of this frame.
 func (f *Frame) Max() core.Address {
 	return f.max
 }
-func (f *Frame) Offset() int64 {
-	return f.off
+
+// PC returns the program counter of the next instruction to be executed by this frame.
+func (f *Frame) PC() core.Address {
+	return f.pc
 }
+
+// Roots returns a list of all the roots in the frame.
 func (f *Frame) Roots() []*Root {
 	return f.roots
 }
@@ -147,14 +154,14 @@ type Root struct {
 	Name string
 	Addr core.Address
 	Type *Type
-	// Live, if non-nil, restricts the set of words in the root that are live.
+	// Live, if non-nil, contains the set of words in the root that are live.
 	Live map[core.Address]bool
 }
 
 // A Type is the representation of the type of a Go object.
 type Type struct {
 	name string
-	size int64
+	Size int64
 	Kind Kind
 
 	// Fields only valid for a subset of kinds.
@@ -212,17 +219,6 @@ func (t *Type) String() string {
 	return t.name
 }
 
-func (t *Type) IsEface() bool {
-	return t.Kind == KindEface
-}
-func (t *Type) IsIface() bool {
-	return t.Kind == KindIface
-}
-
-func (t *Type) Size() int64 {
-	return t.size
-}
-
 type module struct {
 	r             region       // inferior region holding a runtime.moduledata
 	types, etypes core.Address // range that holds all the runtime._type data in this module
@@ -244,12 +240,20 @@ func (f *Func) Name() string {
 	return f.name
 }
 
+// Entry returns the address of the entry point of f.
+func (f *Func) Entry() core.Address {
+	return f.entry
+}
+
 // An Object represents an object in the Go heap.
 type Object struct {
-	Addr   core.Address
-	Size   int64
+	Addr core.Address
+	Size int64
+	// This object has an effective type of [Repeat]Type.
+	// Parts of the object beyond the first Repeat*Type.Size bytes have unknown type.
+	// If Type == nil, the type is unknown. (TODO: provide access to ptr/nonptr bits in this case.)
 	Type   *Type
-	Repeat int64 // Known repeat count for Type
+	Repeat int64
 }
 
 // A Stats struct is the node of a tree representing the entire memory
