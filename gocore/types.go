@@ -56,7 +56,7 @@ type Program struct {
 	globals []*Root
 }
 
-// Process returns the core passed to Core().
+// Process returns the core.Process used to construct this Program.
 func (p *Program) Process() *core.Process {
 	return p.proc
 }
@@ -70,6 +70,7 @@ func (p *Program) Objects() []*Object {
 	return p.objPtrs
 }
 
+// Stats returns a breakdown of the program's memory use by category.
 func (p *Program) Stats() *Stats {
 	return p.stats
 }
@@ -144,7 +145,7 @@ func (f *Frame) PC() core.Address {
 	return f.pc
 }
 
-// Roots returns a list of all the roots in the frame.
+// Roots returns a list of all the garbage collection roots in the frame.
 func (f *Frame) Roots() []*Root {
 	return f.roots
 }

@@ -225,7 +225,7 @@ func main() {
 		fmt.Fprintf(w, "digraph {\n")
 		for k, r := range c.Globals() {
 			printed := false
-			c.ForEachRootEdge(r, func(i int64, y *gocore.Object, j int64) bool {
+			c.ForEachRootPtr(r, func(i int64, y *gocore.Object, j int64) bool {
 				if !printed {
 					fmt.Fprintf(w, "r%d [label=\"%s\n%s\",shape=hexagon]\n", k, r.Name, r.Type)
 					printed = true
@@ -246,7 +246,7 @@ func main() {
 				fmt.Fprintf(w, "%s -> %s [style=dotted]\n", last, frame)
 				last = frame
 				for _, r := range f.Roots() {
-					c.ForEachRootEdge(r, func(i int64, y *gocore.Object, j int64) bool {
+					c.ForEachRootPtr(r, func(i int64, y *gocore.Object, j int64) bool {
 						fmt.Fprintf(w, "%s -> o%x [label=\"%s%s\"", frame, y.Addr, r.Name, typeFieldName(r.Type, i))
 						if j != 0 {
 							fmt.Fprintf(w, " ,headlabel=\"+%d\"", j)
@@ -259,7 +259,7 @@ func main() {
 		}
 		for _, x := range c.Objects() {
 			fmt.Fprintf(w, "o%x [label=\"%s\\n%d\"]\n", x.Addr, typeName(x), x.Size)
-			c.ForEachEdge(x, func(i int64, y *gocore.Object, j int64) bool {
+			c.ForEachPtr(x, func(i int64, y *gocore.Object, j int64) bool {
 				fmt.Fprintf(w, "o%x -> o%x [label=\"%s\"", x.Addr, y.Addr, fieldName(x, i))
 				if j != 0 {
 					fmt.Fprintf(w, ",headlabel=\"+%d\"", j)
@@ -300,7 +300,7 @@ func main() {
 		for {
 			changed := false
 			for _, x := range c.Objects() {
-				c.ForEachEdge(x, func(_ int64, y *gocore.Object, _ int64) bool {
+				c.ForEachPtr(x, func(_ int64, y *gocore.Object, _ int64) bool {
 					if m[y] != 0 && (m[x] == 0 || m[x] > m[y]+1) {
 						m[x] = m[y] + 1
 						changed = true
@@ -319,7 +319,7 @@ func main() {
 		var minf *gocore.Frame
 		var ming *gocore.Goroutine
 		for _, r := range c.Globals() {
-			c.ForEachRootEdge(r, func(_ int64, y *gocore.Object, _ int64) bool {
+			c.ForEachRootPtr(r, func(_ int64, y *gocore.Object, _ int64) bool {
 				if m[y] != 0 && (mind == 0 || m[y] < mind) {
 					mind = m[y]
 					minr = r
@@ -332,7 +332,7 @@ func main() {
 		for _, g := range c.Goroutines() {
 			for _, f := range g.Frames() {
 				for _, r := range f.Roots() {
-					c.ForEachRootEdge(r, func(_ int64, y *gocore.Object, _ int64) bool {
+					c.ForEachRootPtr(r, func(_ int64, y *gocore.Object, _ int64) bool {
 						if m[y] != 0 && (mind == 0 || m[y] < mind) {
 							mind = m[y]
 							minr = r
@@ -362,7 +362,7 @@ func main() {
 			}
 		}
 		var x *gocore.Object
-		c.ForEachRootEdge(minr, func(i int64, y *gocore.Object, j int64) bool {
+		c.ForEachRootPtr(minr, func(i int64, y *gocore.Object, j int64) bool {
 			if m[y] != mind {
 				return true
 			}
@@ -376,7 +376,7 @@ func main() {
 		})
 		for d := mind - 1; d != 0; d-- {
 			fmt.Printf("%x %s", x.Addr, typeName(x))
-			c.ForEachEdge(x, func(i int64, y *gocore.Object, j int64) bool {
+			c.ForEachPtr(x, func(i int64, y *gocore.Object, j int64) bool {
 				if m[y] != d {
 					return true
 				}

@@ -145,13 +145,13 @@ func (p *Program) findObjectIndex(a core.Address) (int, int64) {
 	return i, a.Sub(p.objects[i].Addr)
 }
 
-// ForEachEdge calls fn for all heap pointers it finds in x.
+// ForEachPtr calls fn for all heap pointers it finds in x.
 // It calls fn with:
 //   the offset of the pointer slot in x
 //   the pointed-to object y
 //   the offset in y where the pointer points.
-// If fn returns false, ForEachEdge returns immediately.
-func (p *Program) ForEachEdge(x *Object, fn func(int64, *Object, int64) bool) {
+// If fn returns false, ForEachPtr returns immediately.
+func (p *Program) ForEachPtr(x *Object, fn func(int64, *Object, int64) bool) {
 	for i := int64(0); i < x.Size; i += p.proc.PtrSize() {
 		a := x.Addr.Add(i)
 		if !p.isPtr(a) {
@@ -167,8 +167,8 @@ func (p *Program) ForEachEdge(x *Object, fn func(int64, *Object, int64) bool) {
 	}
 }
 
-// ForEachRootEdge behaves like ForEachEdge but it starts with a Root instead of an Object.
-func (p *Program) ForEachRootEdge(r *Root, fn func(int64, *Object, int64) bool) {
+// ForEachRootPtr behaves like ForEachPtr but it starts with a Root instead of an Object.
+func (p *Program) ForEachRootPtr(r *Root, fn func(int64, *Object, int64) bool) {
 	edges1(p, r, 0, r.Type, fn)
 }
 
