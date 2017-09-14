@@ -43,7 +43,7 @@ func (p *Program) readObjects() {
 	for _, g := range p.goroutines {
 		for _, f := range g.frames {
 			for a := range f.live { // TODO: iteration order matter?
-				add(p.proc.ReadAddress(a))
+				add(p.proc.ReadPtr(a))
 			}
 		}
 	}
@@ -57,7 +57,7 @@ func (p *Program) readObjects() {
 			n := max.Sub(min) / ptrSize
 			for i := int64(0); i < n; i++ {
 				if p.proc.ReadUint8(gc.Add(i/8))>>uint(i%8)&1 != 0 {
-					add(p.proc.ReadAddress(min.Add(i * ptrSize)))
+					add(p.proc.ReadPtr(min.Add(i * ptrSize)))
 				}
 			}
 		}
@@ -74,7 +74,7 @@ func (p *Program) readObjects() {
 		// scan [obj.Addr,obj.Addr+obj.Size]
 		for a := obj.Addr; a < obj.Addr.Add(obj.Size); a = a.Add(ptrSize) {
 			if p.isPtr(a) {
-				add(p.proc.ReadAddress(a))
+				add(p.proc.ReadPtr(a))
 			}
 		}
 	}
@@ -157,7 +157,7 @@ func (p *Program) ForEachPtr(x *Object, fn func(int64, *Object, int64) bool) {
 		if !p.isPtr(a) {
 			continue
 		}
-		ptr := p.proc.ReadAddress(a)
+		ptr := p.proc.ReadPtr(a)
 		y, off := p.FindObject(ptr)
 		if y != nil {
 			if !fn(i, y, off) {
@@ -184,7 +184,7 @@ func edges1(p *Program, r *Root, off int64, t *Type, fn func(int64, *Object, int
 		// Types might be, though.
 		a := r.Addr.Add(off)
 		if r.Live == nil || r.Live[a] {
-			dst, off2 := p.FindObject(p.proc.ReadAddress(a))
+			dst, off2 := p.FindObject(p.proc.ReadPtr(a))
 			if dst != nil {
 				if !fn(off, dst, off2) {
 					return false
@@ -197,7 +197,7 @@ func edges1(p *Program, r *Root, off int64, t *Type, fn func(int64, *Object, int
 	case KindPtr, KindString, KindSlice, KindFunc:
 		a := r.Addr.Add(off)
 		if r.Live == nil || r.Live[a] {
-			dst, off2 := p.FindObject(p.proc.ReadAddress(a))
+			dst, off2 := p.FindObject(p.proc.ReadPtr(a))
 			if dst != nil {
 				if !fn(off, dst, off2) {
 					return false

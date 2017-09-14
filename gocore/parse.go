@@ -52,7 +52,7 @@ func Core(proc *core.Process) (p *Program, err error) {
 
 	// Load the build version.
 	a := m["runtime.buildVersion"]
-	ptr := proc.ReadAddress(a)
+	ptr := proc.ReadPtr(a)
 	len := proc.ReadInt(a.Add(proc.PtrSize()))
 	b := make([]byte, len)
 	proc.ReadAt(b, ptr)
@@ -215,7 +215,7 @@ func (p *Program) readSpans() {
 		case spanManual:
 			manualSpanSize += spanSize
 			manualAllocSize += spanSize
-			for x := core.Address(s.Field("manualFreeList").Cast("uintptr").Uintptr()); x != 0; x = p.proc.ReadAddress(x) {
+			for x := core.Address(s.Field("manualFreeList").Cast("uintptr").Uintptr()); x != 0; x = p.proc.ReadPtr(x) {
 				manualAllocSize -= elemSize
 				manualFreeSize += elemSize
 			}
@@ -466,7 +466,7 @@ func (m *module) readFunc(r region, pcln region) *Func {
 	a = a.Align(r.p.proc.PtrSize())
 	n = r.Field("nfuncdata").Int32()
 	for i := int32(0); i < n; i++ {
-		f.funcdata = append(f.funcdata, r.p.proc.ReadAddress(a))
+		f.funcdata = append(f.funcdata, r.p.proc.ReadPtr(a))
 		a = a.Add(r.p.proc.PtrSize())
 	}
 
@@ -502,7 +502,7 @@ func funcdata(r region, n int64) core.Address {
 		x++
 	}
 	a := r.a.Add(int64(r.p.rtStructs["runtime._func"].size + 4*int64(x) + r.p.proc.PtrSize()*n))
-	return r.p.proc.ReadAddress(a)
+	return r.p.proc.ReadPtr(a)
 }
 
 func (p *Program) readMs() {
@@ -586,12 +586,12 @@ func (p *Program) readG(r region) *Goroutine {
 		if f.f.name == "runtime.sigtrampgo" {
 			// Continue traceback at location where the signal
 			// interrupted normal execution.
-			ctxt := p.proc.ReadAddress(sp.Add(16)) // 3rd arg
+			ctxt := p.proc.ReadPtr(sp.Add(16)) // 3rd arg
 			//ctxt is a *ucontext
 			mctxt := ctxt.Add(5 * 8)
 			// mctxt is a *mcontext
-			sp = p.proc.ReadAddress(mctxt.Add(15 * 8))
-			pc = p.proc.ReadAddress(mctxt.Add(16 * 8))
+			sp = p.proc.ReadPtr(mctxt.Add(15 * 8))
+			pc = p.proc.ReadPtr(mctxt.Add(16 * 8))
 			// TODO: totally arch-dependent!
 		} else {
 			sp = f.max

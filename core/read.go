@@ -1,7 +1,7 @@
 package core
 
 import (
-	"debug/elf"
+	"debug/elf" // TODO: use golang.org/x/debug/elf instead?
 	"encoding/binary"
 	"fmt"
 	"os"
@@ -511,8 +511,8 @@ func (p *Process) ReadInt(a Address) int64 {
 	return p.ReadInt64(a)
 }
 
-// ReadAddress returns a pointer loaded from address a of the inferior.
-func (p *Process) ReadAddress(a Address) Address {
+// ReadPtr returns a pointer loaded from address a of the inferior.
+func (p *Process) ReadPtr(a Address) Address {
 	return Address(p.ReadUintptr(a))
 }
 

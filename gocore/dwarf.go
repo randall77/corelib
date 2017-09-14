@@ -419,7 +419,7 @@ func (p *Program) typeHeap() {
 }
 
 type reader interface {
-	ReadAddress(core.Address) core.Address
+	ReadPtr(core.Address) core.Address
 	ReadInt(core.Address) int64
 }
 
@@ -428,11 +428,11 @@ type frameReader struct {
 	live map[core.Address]bool
 }
 
-func (fr *frameReader) ReadAddress(a core.Address) core.Address {
+func (fr *frameReader) ReadPtr(a core.Address) core.Address {
 	if !fr.live[a] {
 		return 0
 	}
-	return fr.p.proc.ReadAddress(a)
+	return fr.p.proc.ReadPtr(a)
 }
 func (fr *frameReader) ReadInt(a core.Address) int64 {
 	return fr.p.proc.ReadInt(a)
@@ -450,13 +450,13 @@ func (p *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 	case KindEface, KindIface:
 		// interface. Use the type word to determine the type
 		// of the pointed-to object.
-		typ := r.ReadAddress(a)
+		typ := r.ReadPtr(a)
 		if typ == 0 { // nil interface
 			return
 		}
-		ptr := r.ReadAddress(a.Add(ptrSize))
+		ptr := r.ReadPtr(a.Add(ptrSize))
 		if t.Kind == KindIface {
-			typ = p.proc.ReadAddress(typ.Add(p.rtStructs["runtime.itab"].fields["_type"].off))
+			typ = p.proc.ReadPtr(typ.Add(p.rtStructs["runtime.itab"].fields["_type"].off))
 		}
 		// TODO: for KindEface, type the typ pointer. It might point to the heap
 		// if the type was allocated with reflect.
@@ -485,16 +485,16 @@ func (p *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		}
 		add(ptr, dt, 1)
 	case KindString:
-		ptr := r.ReadAddress(a)
+		ptr := r.ReadPtr(a)
 		len := r.ReadInt(a.Add(ptrSize))
 		add(ptr, t.Elem, len)
 	case KindSlice:
-		ptr := r.ReadAddress(a)
+		ptr := r.ReadPtr(a)
 		cap := r.ReadInt(a.Add(2 * ptrSize))
 		add(ptr, t.Elem, cap)
 	case KindPtr:
 		if t.Elem != nil { // unsafe.Pointer has a nil Elem field.
-			add(r.ReadAddress(a), t.Elem, 1)
+			add(r.ReadPtr(a), t.Elem, 1)
 		}
 	case KindFunc:
 		// The referent is a closure. We don't know much about the
@@ -502,11 +502,11 @@ func (p *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		// The runtime._type we want exists in the binary (for all
 		// heap-allocated closures, anyway) but it would be hard to find
 		// just given the pc.
-		closure := r.ReadAddress(a)
+		closure := r.ReadPtr(a)
 		if closure == 0 {
 			break
 		}
-		pc := p.proc.ReadAddress(closure)
+		pc := p.proc.ReadPtr(closure)
 		f := p.funcTab.find(pc)
 		if f == nil {
 			panic(fmt.Sprintf("can't find func for closure pc %x", pc))
@@ -534,7 +534,7 @@ func (p *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			var n int64
 			for _, f := range t.Fields {
 				if f.Name == "buckets" {
-					bPtr = p.proc.ReadAddress(a.Add(f.Off))
+					bPtr = p.proc.ReadPtr(a.Add(f.Off))
 					bTyp = f.Type.Elem
 				}
 				if f.Name == "B" {

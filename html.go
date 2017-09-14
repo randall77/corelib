@@ -229,8 +229,8 @@ func htmlObject(w http.ResponseWriter, c *gocore.Program, name string, a core.Ad
 		fmt.Fprintf(w, "<tr><td>%s</td><td>%s</td><td>%s</td></tr>\n", name, html.EscapeString(t.String()), htmlPointerAt(c, a, live))
 	case gocore.KindFunc:
 		fmt.Fprintf(w, "<tr><td>%s</td><td>%s</td><td>%s</td>", name, html.EscapeString(t.String()), htmlPointerAt(c, a, live))
-		if fn := c.Process().ReadAddress(a); fn != 0 {
-			pc := c.Process().ReadAddress(fn)
+		if fn := c.Process().ReadPtr(a); fn != 0 {
+			pc := c.Process().ReadPtr(fn)
 			if f := c.FindFunc(pc); f != nil && f.Entry() == pc {
 				fmt.Fprintf(w, "<td>%s</td>", f.Name())
 			}
@@ -248,7 +248,7 @@ func htmlObject(w http.ResponseWriter, c *gocore.Program, name string, a core.Ad
 					ddd = "..."
 				}
 				b := make([]byte, n2)
-				c.Process().ReadAt(b, c.Process().ReadAddress(a))
+				c.Process().ReadAt(b, c.Process().ReadPtr(a))
 				fmt.Fprintf(w, "<td rowspan=\"2\">\"%s\"%s</td>", html.EscapeString(string(b)), ddd)
 			} else {
 				fmt.Fprintf(w, "<td rowspan=\"2\">\"\"</td>")
@@ -299,7 +299,7 @@ func htmlPointerAt(c *gocore.Program, a core.Address, live map[core.Address]bool
 	if live != nil && !live[a] {
 		return "<text style=\"color:LightGray\">dead</text>"
 	}
-	return htmlPointer(c, c.Process().ReadAddress(a))
+	return htmlPointer(c, c.Process().ReadPtr(a))
 }
 
 func tableStyle(w http.ResponseWriter) {

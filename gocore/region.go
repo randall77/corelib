@@ -23,7 +23,7 @@ func (r region) Address() core.Address {
 	if len(r.typ) == 0 || r.typ[0] != '*' {
 		panic("can't ask for the Address of a non-pointer " + r.typ)
 	}
-	return r.p.proc.ReadAddress(r.a)
+	return r.p.proc.ReadPtr(r.a)
 }
 
 // Int returns the int value stored in r.
@@ -60,7 +60,7 @@ func (r region) Deref() region {
 	if len(r.typ) == 0 || r.typ[0] != '*' {
 		panic("can't load on non-pointer: " + r.typ)
 	}
-	p := r.p.proc.ReadAddress(r.a)
+	p := r.p.proc.ReadPtr(r.a)
 	return region{p: r.p, a: p, typ: r.typ[1:]}
 }
 
@@ -104,7 +104,7 @@ func (r region) String() string {
 	if r.typ != "string" {
 		panic("bad string type " + r.typ)
 	}
-	p := r.p.proc.ReadAddress(r.a)
+	p := r.p.proc.ReadPtr(r.a)
 	n := r.p.proc.ReadUintptr(r.a.Add(r.p.proc.PtrSize()))
 	b := make([]byte, n)
 	r.p.proc.ReadAt(b, p)
@@ -116,7 +116,7 @@ func (r region) SliceIndex(n int64) region {
 	if len(r.typ) < 2 || r.typ[:2] != "[]" {
 		panic("can't index a non-slice")
 	}
-	p := r.p.proc.ReadAddress(r.a)
+	p := r.p.proc.ReadPtr(r.a)
 	return region{p: r.p, a: p.Add(n * r.p.typeSize(r.typ[2:])), typ: r.typ[2:]}
 }
 
