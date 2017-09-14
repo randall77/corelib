@@ -63,11 +63,21 @@ func serveHtml(c *gocore.Program) {
 			end = n * x.Type.Size
 		}
 		for i := end; i < x.Size; i += c.Process().PtrSize() {
-			fmt.Fprintf(w, "<tr><td>f%d</td><td>?</td><td>", i)
+			fmt.Fprintf(w, "<tr><td>f%d</td><td>?</td><td><pre>", i)
 			for j := int64(0); j < c.Process().PtrSize(); j++ {
 				fmt.Fprintf(w, "%02x ", c.Process().ReadUint8(x.Addr.Add(i+j)))
 			}
-			fmt.Fprintf(w, "</td></tr>\n")
+			fmt.Fprintf(w, "</pre></td><td><pre>")
+			for j := int64(0); j < c.Process().PtrSize(); j++ {
+				r := c.Process().ReadUint8(x.Addr.Add(i + j))
+				if r >= 32 && r <= 126 {
+					fmt.Fprintf(w, "%s", html.EscapeString(string(rune(r))))
+				} else {
+					fmt.Fprintf(w, ".")
+				}
+			}
+			fmt.Fprintf(w, "</pre></td>")
+			fmt.Fprintf(w, "</tr>\n")
 		}
 		fmt.Fprintf(w, "</table>\n")
 	})
@@ -133,7 +143,8 @@ func serveHtml(c *gocore.Program) {
 	})
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "<h1>core dump viewer</h1>\n")
-		fmt.Fprintf(w, "go version %s<br/>\n", c.BuildVersion())
+		fmt.Fprintf(w, "%s<br/>\n", c.Process().Arch())
+		fmt.Fprintf(w, "%s<br/>\n", c.BuildVersion())
 		fmt.Fprintf(w, "<a href=\"goroutines\">goroutines</a><br/>\n")
 		fmt.Fprintf(w, "<a href=\"globals\">globals</a><br/>\n")
 		tableStyle(w)
@@ -214,23 +225,34 @@ func htmlObject(w http.ResponseWriter, c *gocore.Program, name string, a core.Ad
 	case gocore.KindIface:
 		fmt.Fprintf(w, "<tr><td>%s</td><td>*runtime.itab</td><td>%s</td></tr>\n", name, htmlPointerAt(c, a, live))
 		fmt.Fprintf(w, "<tr><td>%s</td><td>unsafe.Pointer</td><td>%s</td></tr>\n", name, htmlPointerAt(c, a.Add(c.Process().PtrSize()), live))
-	case gocore.KindPtr, gocore.KindFunc:
+	case gocore.KindPtr:
 		fmt.Fprintf(w, "<tr><td>%s</td><td>%s</td><td>%s</td></tr>\n", name, html.EscapeString(t.String()), htmlPointerAt(c, a, live))
+	case gocore.KindFunc:
+		fmt.Fprintf(w, "<tr><td>%s</td><td>%s</td><td>%s</td>", name, html.EscapeString(t.String()), htmlPointerAt(c, a, live))
+		if fn := c.Process().ReadAddress(a); fn != 0 {
+			pc := c.Process().ReadAddress(fn)
+			if f := c.FindFunc(pc); f != nil && f.Entry() == pc {
+				fmt.Fprintf(w, "<td>%s</td>", f.Name())
+			}
+		}
+		fmt.Fprintf(w, "</tr>\n")
 	case gocore.KindString:
 		n := c.Process().ReadInt(a.Add(c.Process().PtrSize()))
 		fmt.Fprintf(w, "<tr><td>%s.ptr</td><td>*uint8</td><td>%s</td>", name, htmlPointerAt(c, a, live))
-		if n > 0 {
-			n2 := n
-			ddd := ""
-			if n > 100 {
-				n2 = 100
-				ddd = "..."
+		if live == nil || live[a] {
+			if n > 0 {
+				n2 := n
+				ddd := ""
+				if n > 100 {
+					n2 = 100
+					ddd = "..."
+				}
+				b := make([]byte, n2)
+				c.Process().ReadAt(b, c.Process().ReadAddress(a))
+				fmt.Fprintf(w, "<td rowspan=\"2\">\"%s\"%s</td>", html.EscapeString(string(b)), ddd)
+			} else {
+				fmt.Fprintf(w, "<td rowspan=\"2\">\"\"</td>")
 			}
-			b := make([]byte, n2)
-			c.Process().ReadAt(b, c.Process().ReadAddress(a))
-			fmt.Fprintf(w, "<td rowspan=\"2\">\"%s\"%s</td>", html.EscapeString(string(b)), ddd)
-		} else {
-			fmt.Fprintf(w, "<td rowspan=\"2\">\"\"</td>")
 		}
 		fmt.Fprintf(w, "</tr>\n")
 		fmt.Fprintf(w, "<tr><td>%s.len</td><td>int</td><td>%d</td></tr>\n", name, n)

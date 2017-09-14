@@ -84,6 +84,11 @@ func (p *Program) Globals() []*Root {
 	return p.globals
 }
 
+// FindFunc returns the function which contains the code at address pc, if any.
+func (p *Program) FindFunc(pc core.Address) *Func {
+	return p.funcTab.find(pc)
+}
+
 type Goroutine struct {
 	r         region // inferior region holding the runtime.g
 	stackSize int64  // current stack allocation
