@@ -18,11 +18,8 @@ type Program struct {
 	goroutines []*Goroutine
 
 	// runtime info
-	rtStructs   map[string]structInfo
+	rtGlobals   map[string]region
 	rtConstants map[string]int64
-
-	// runtime globals
-	runtime map[string]region
 
 	// A module is a loadable unit. Most Go programs have 1, programs
 	// which load plugins will have more.
@@ -30,9 +27,6 @@ type Program struct {
 
 	// address -> function mapping
 	funcTab funcTab
-
-	// list of types
-	types []*Type
 
 	// map from dwarf type to *Type
 	dwarfMap map[dwarf.Type]*Type
@@ -87,6 +81,14 @@ func (p *Program) Globals() []*Root {
 // FindFunc returns the function which contains the code at address pc, if any.
 func (p *Program) FindFunc(pc core.Address) *Func {
 	return p.funcTab.find(pc)
+}
+
+func (p *Program) findType(name string) *Type {
+	s := p.runtimeNameMap[name]
+	if len(s) == 0 {
+		panic("can't find type " + name)
+	}
+	return s[0]
 }
 
 type Goroutine struct {
@@ -225,6 +227,19 @@ func (t *Type) String() string {
 	return t.name
 }
 
+func (t *Type) field(name string) *Field {
+	if t.Kind != KindStruct {
+		panic("asking for field of non-struct")
+	}
+	for i := range t.Fields {
+		f := &t.Fields[i]
+		if f.Name == name {
+			return f
+		}
+	}
+	return nil
+}
+
 type module struct {
 	r             region       // inferior region holding a runtime.moduledata
 	types, etypes core.Address // range that holds all the runtime._type data in this module
@@ -280,16 +295,6 @@ func (s *Stats) Child(name string) *Stats {
 		}
 	}
 	return nil
-}
-
-type structInfo struct {
-	size   int64
-	fields map[string]fieldInfo
-}
-
-type fieldInfo struct {
-	off int64
-	typ string
 }
 
 // Information for 512 bytes of heap.

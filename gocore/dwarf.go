@@ -15,6 +15,7 @@ func (p *Program) readDWARFTypes() {
 
 	// Make one of our own Types for each dwarf type.
 	r := d.Reader()
+	var types []*Type
 	for e, err := r.Next(); e != nil && err == nil; e, err = r.Next() {
 		switch e.Tag {
 		case dwarf.TagArrayType, dwarf.TagPointerType, dwarf.TagStructType, dwarf.TagBaseType, dwarf.TagSubroutineType, dwarf.TagTypedef:
@@ -27,8 +28,8 @@ func (p *Program) readDWARFTypes() {
 				size = dwarfSize(dt, p.proc.PtrSize())
 			}
 			t := &Type{name: gocoreName(dt), Size: size}
-			p.types = append(p.types, t)
 			p.dwarfMap[dt] = t
+			types = append(types, t)
 		}
 	}
 
@@ -71,7 +72,7 @@ func (p *Program) readDWARFTypes() {
 	}
 
 	// Detect strings & slices
-	for _, t := range p.types {
+	for _, t := range types {
 		if t.Kind != KindStruct {
 			continue
 		}
@@ -131,6 +132,13 @@ func (p *Program) readDWARFTypes() {
 			t.Kind = KindIface
 			t.Fields = nil
 		}
+	}
+
+	// Make a runtime name -> Type map for existing DWARF types.
+	p.runtimeNameMap = map[string][]*Type{}
+	for dt, t := range p.dwarfMap {
+		name := runtimeName(dt)
+		p.runtimeNameMap[name] = append(p.runtimeNameMap[name], t)
 	}
 }
 
@@ -456,12 +464,12 @@ func (p *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		}
 		ptr := r.ReadPtr(a.Add(ptrSize))
 		if t.Kind == KindIface {
-			typ = p.proc.ReadPtr(typ.Add(p.rtStructs["runtime.itab"].fields["_type"].off))
+			typ = p.proc.ReadPtr(typ.Add(p.findType("runtime.itab").field("_type").Off))
 		}
 		// TODO: for KindEface, type the typ pointer. It might point to the heap
 		// if the type was allocated with reflect.
 
-		direct := p.proc.ReadUint8(typ.Add(p.rtStructs["runtime._type"].fields["kind"].off))&uint8(p.rtConstants["kindDirectIface"]) != 0
+		direct := p.proc.ReadUint8(typ.Add(p.findType("runtime._type").field("kind").Off))&uint8(p.rtConstants["kindDirectIface"]) != 0
 		dt := p.runtimeType2Type(typ)
 		if direct {
 			// Find the base type of the pointer held in the interface.
@@ -514,7 +522,6 @@ func (p *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		ft := f.closure
 		if ft == nil {
 			ft = &Type{name: "closure for " + f.name, Size: ptrSize, Kind: KindPtr}
-			p.types = append(p.types, ft)
 			// For now, treat a closure like an unsafe.Pointer.
 			// TODO: better value for size?
 			f.closure = ft
@@ -553,27 +560,8 @@ func (p *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 	}
 }
 
-// findRuntimeInfo uses DWARF information to find all the struct sizes,
-// field offsets, and field types for runtime data structures.
-// It also finds a useful set of runtime constants.
-// It populates p.rtStructs and rtConstants.
-func (p *Program) findRuntimeInfo() {
-	p.rtStructs = map[string]structInfo{}
-	for dt, _ := range p.dwarfMap {
-		rtname := runtimeName(dt)
-		if !strings.HasPrefix(rtname, "runtime.") {
-			continue
-		}
-		x, ok := dt.(*dwarf.StructType)
-		if !ok {
-			continue
-		}
-		s := structInfo{size: dt.Size(), fields: map[string]fieldInfo{}}
-		for _, f := range x.Field {
-			s.fields[f.Name] = fieldInfo{off: f.ByteOffset, typ: runtimeName(f.Type)}
-		}
-		p.rtStructs[rtname] = s
-	}
+// readRuntimeConstants populates the p.rtConstants map.
+func (p *Program) readRuntimeConstants() {
 	p.rtConstants = map[string]int64{}
 	// TODO: It would be ideal if we could glean this info from DWARF.
 	// But we don't package up constants in DWARF right now. See issue #14517.
@@ -600,23 +588,22 @@ func (p *Program) findRuntimeInfo() {
 	m["_PageSize"] = 1 << 13
 }
 
-func (p *Program) findRoots() {
-	const (
-		DW_OP_addr           = 0x03
-		DW_OP_call_frame_cfa = 0x9c
-		DW_OP_plus           = 0x22
-		DW_OP_consts         = 0x11
-	)
-	d, _ := p.proc.DWARF()
+const (
+	_DW_OP_addr           = 0x03
+	_DW_OP_call_frame_cfa = 0x9c
+	_DW_OP_plus           = 0x22
+	_DW_OP_consts         = 0x11
+)
 
-	// Find global variables.
+func (p *Program) readGlobals() {
+	d, _ := p.proc.DWARF()
 	r := d.Reader()
 	for e, err := r.Next(); e != nil && err == nil; e, err = r.Next() {
 		if e.Tag != dwarf.TagVariable {
 			continue
 		}
 		loc := e.AttrField(dwarf.AttrLocation).Val.([]byte)
-		if loc[0] != DW_OP_addr {
+		if loc[0] != _DW_OP_addr {
 			continue
 		}
 		var a core.Address
@@ -644,8 +631,9 @@ func (p *Program) findRoots() {
 			Live: nil,
 		})
 	}
+}
 
-	// Find stack variables.
+func (p *Program) readStackVars() {
 	type Var struct {
 		name string
 		off  int64
@@ -653,7 +641,8 @@ func (p *Program) findRoots() {
 	}
 	vars := map[*Func][]Var{}
 	var curfn *Func
-	r = d.Reader()
+	d, _ := p.proc.DWARF()
+	r := d.Reader()
 	for e, err := r.Next(); e != nil && err == nil; e, err = r.Next() {
 		if e.Tag == dwarf.TagSubprogram {
 			min := core.Address(e.AttrField(dwarf.AttrLowpc).Val.(uint64))
@@ -681,14 +670,14 @@ func (p *Program) findRoots() {
 			continue
 		}
 		loc := aloc.Val.([]byte)
-		if len(loc) == 0 || loc[0] != DW_OP_call_frame_cfa {
+		if len(loc) == 0 || loc[0] != _DW_OP_call_frame_cfa {
 			continue
 		}
 		loc = loc[1:]
 		var off int64
-		if len(loc) != 0 && loc[len(loc)-1] == DW_OP_plus {
+		if len(loc) != 0 && loc[len(loc)-1] == _DW_OP_plus {
 			loc = loc[:len(loc)-1]
-			if len(loc) == 0 || loc[0] != DW_OP_consts {
+			if len(loc) == 0 || loc[0] != _DW_OP_consts {
 				continue
 			}
 			loc = loc[1:]
@@ -748,7 +737,7 @@ func (p *Program) findRoots() {
 				r := &Root{
 					Name: "unk",
 					Addr: a,
-					Type: p.runtimeNameMap["unsafe.Pointer"][0],
+					Type: p.findType("unsafe.Pointer"),
 					Live: f.live,
 				}
 				f.roots = append(f.roots, r)

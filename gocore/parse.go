@@ -3,26 +3,13 @@ package gocore
 import (
 	"debug/dwarf"
 	"fmt"
+	"strings"
 
 	"github.com/randall77/corelib/core"
 )
 
 // Core takes a loaded core file and extracts Go information from it.
 func Core(proc *core.Process) (p *Program, err error) {
-	// Check symbol table to make sure we know the addresses
-	// of some critical runtime data structures.
-	m, err := proc.Symbols()
-	if err != nil {
-		return nil, err
-	}
-	for _, s := range rtSymbols {
-		if m["runtime."+s.name] == 0 {
-			// We're missing some address that we need.
-			return nil, fmt.Errorf("can't find runtime data structure %s. Is the binary unstripped?", s.name)
-		}
-	}
-	// TODO: is the symbol table redundant with the DWARF info? Could we just use DWARF?
-
 	// Make sure we have DWARF info.
 	if _, err := proc.DWARF(); err != nil {
 		return nil, err
@@ -50,51 +37,34 @@ func Core(proc *core.Process) (p *Program, err error) {
 		dwarfMap:   map[dwarf.Type]*Type{},
 	}
 
-	// Load the build version.
-	a := m["runtime.buildVersion"]
-	ptr := proc.ReadPtr(a)
-	len := proc.ReadInt(a.Add(proc.PtrSize()))
-	b := make([]byte, len)
-	proc.ReadAt(b, ptr)
-	p.buildVersion = string(b)
+	// Initialize everything that just depends on DWARF.
+	p.readDWARFTypes()
+	p.readRuntimeConstants()
+	p.readGlobals()
 
-	// Initialize runtime regions.
-	p.runtime = map[string]region{}
-	for _, s := range rtSymbols {
-		p.runtime[s.name] = region{p: p, a: m["runtime."+s.name], typ: s.typ}
+	// Find runtime globals we care about. Initialize regions for them.
+	p.rtGlobals = map[string]region{}
+	for _, g := range p.globals {
+		if strings.HasPrefix(g.Name, "runtime.") {
+			p.rtGlobals[g.Name[8:]] = region{p: p, a: g.Addr, typ: g.Type}
+		}
 	}
 
-	p.readDWARFTypes()
-	p.findRuntimeInfo()
+	// Read all the data that depends on runtime globals.
+	p.buildVersion = p.rtGlobals["buildVersion"].String()
 	p.readModules()
+	p.readStackVars()
 	p.readSpans()
 	p.readMs()
 	p.readGs()
-	p.findRoots()
 	p.readObjects()
 	p.typeHeap()
-	return
-}
 
-// rtSymbols is a list of all the runtime globals that we need to access,
-// together with their types.
-var rtSymbols = [...]struct {
-	name, typ string
-}{
-	{"mheap_", "runtime.mheap"},
-	{"memstats", "runtime.mstats"},
-	{"sched", "runtime.schedt"},
-	{"allfin", "*runtime.finblock"},
-	{"finq", "*runtime.finblock"},
-	{"allgs", "[]*runtime.g"},
-	{"allm", "*runtime.m"},
-	{"allp", "[1]*p"}, // TODO: type depends on _MaxGomaxprocs
-	{"modulesSlice", "*[]*runtime.moduledata"},
-	{"buildVersion", "string"},
+	return p, nil
 }
 
 func (p *Program) readSpans() {
-	mheap := p.runtime["mheap_"]
+	mheap := p.rtGlobals["mheap_"]
 
 	spanTableStart := mheap.Field("spans").SlicePtr().Address()
 	spanTableEnd := spanTableStart.Add(mheap.Field("spans").SliceCap() * p.proc.PtrSize())
@@ -260,14 +230,7 @@ func (p *Program) readSpans() {
 }
 
 func (p *Program) readModules() {
-	// Make a runtime name -> Type map for existing DWARF types.
-	p.runtimeNameMap = map[string][]*Type{}
-	for dt, t := range p.dwarfMap {
-		name := runtimeName(dt)
-		p.runtimeNameMap[name] = append(p.runtimeNameMap[name], t)
-	}
-
-	ms := p.runtime["modulesSlice"].Deref()
+	ms := p.rtGlobals["modulesSlice"].Cast("*[]*runtime.moduledata").Deref()
 	n := ms.SliceLen()
 	for i := int64(0); i < n; i++ {
 		md := ms.SliceIndex(i).Deref()
@@ -343,13 +306,13 @@ func (t *Type) ptrs1(s []int64, off int64) []int64 {
 // Convert the address of a runtime._type to a *Type.
 // Guaranteed to return a non-nil *Type.
 func (p *Program) runtimeType2Type(a core.Address) *Type {
-	if t, ok := p.runtimeMap[a]; ok {
+	if t := p.runtimeMap[a]; t != nil {
 		return t
 	}
 	ptrSize := p.proc.PtrSize()
 
 	// Read runtime._type.size
-	r := region{p: p, a: a, typ: "runtime._type"}
+	r := region{p: p, a: a, typ: p.findType("runtime._type")}
 	size := int64(r.Field("size").Uintptr())
 
 	// Find module this type is in.
@@ -413,13 +376,12 @@ func (p *Program) runtimeType2Type(a core.Address) *Type {
 	} else {
 		// There's no corresponding DWARF type.  Make our own.
 		t = &Type{name: name, Size: size, Kind: KindStruct}
-		p.types = append(p.types, t)
 		n := t.Size / ptrSize
 
 		// Types to use for ptr/nonptr fields of runtime types which
 		// have no corresponding DWARF type.
-		ptr := p.runtimeNameMap["unsafe.Pointer"][0]
-		nonptr := p.runtimeNameMap["uintptr"][0]
+		ptr := p.findType("unsafe.Pointer")
+		nonptr := p.findType("uintptr")
 		if ptr == nil || nonptr == nil {
 			panic("ptr / nonptr standins missing")
 		}
@@ -457,7 +419,7 @@ func (m *module) readFunc(r region, pcln region) *Func {
 	f.frameSize.read(r.p.proc, pcln.SliceIndex(int64(r.Field("pcsp").Int32())).a)
 
 	// Parse pcdata and funcdata, which are laid out beyond the end of the _func.
-	a := r.a.Add(int64(r.p.rtStructs["runtime._func"].size))
+	a := r.a.Add(int64(r.p.findType("runtime._func").Size))
 	n := r.Field("npcdata").Int32()
 	for i := int32(0); i < n; i++ {
 		f.pcdata = append(f.pcdata, r.p.proc.ReadInt32(a))
@@ -485,7 +447,7 @@ func pcdata(r region, pcln region, n int64) core.Address {
 	if n >= int64(r.Field("npcdata").Int32()) {
 		return 0
 	}
-	a := r.a.Add(int64(r.p.rtStructs["runtime._func"].size + 4*n))
+	a := r.a.Add(int64(r.p.findType("runtime._func").Size + 4*n))
 
 	off := r.p.proc.ReadInt32(a)
 	return pcln.SliceIndex(int64(off)).a
@@ -501,12 +463,12 @@ func funcdata(r region, n int64) core.Address {
 	if x&1 != 0 && r.p.proc.PtrSize() == 8 {
 		x++
 	}
-	a := r.a.Add(int64(r.p.rtStructs["runtime._func"].size + 4*int64(x) + r.p.proc.PtrSize()*n))
+	a := r.a.Add(int64(r.p.findType("runtime._func").Size + 4*int64(x) + r.p.proc.PtrSize()*n))
 	return r.p.proc.ReadPtr(a)
 }
 
 func (p *Program) readMs() {
-	mp := p.runtime["allm"]
+	mp := p.rtGlobals["allm"]
 	for mp.Address() != 0 {
 		m := mp.Deref()
 		gs := m.Field("gsignal")
@@ -521,7 +483,7 @@ func (p *Program) readMs() {
 
 func (p *Program) readGs() {
 	// TODO: figure out how to "flush" running Gs.
-	allgs := p.runtime["allgs"]
+	allgs := p.rtGlobals["allgs"]
 	n := allgs.SliceLen()
 	for i := int64(0); i < n; i++ {
 		r := allgs.SliceIndex(i).Deref()
@@ -625,7 +587,7 @@ func (p *Program) readFrame(sp, pc core.Address) *Frame {
 	// Find live ptrs in locals
 	live := map[core.Address]bool{}
 	if x := int(p.rtConstants["_FUNCDATA_LocalsPointerMaps"]); x < len(f.funcdata) {
-		locals := region{p: p, a: f.funcdata[x], typ: "runtime.stackmap"}
+		locals := region{p: p, a: f.funcdata[x], typ: p.findType("runtime.stackmap")}
 		n := locals.Field("n").Int32()       // # of bitmaps
 		nbit := locals.Field("nbit").Int32() // # of bits per bitmap
 		idx := f.stackMap.find(off)
@@ -645,7 +607,7 @@ func (p *Program) readFrame(sp, pc core.Address) *Frame {
 	}
 	// Same for args
 	if x := int(p.rtConstants["_FUNCDATA_ArgsPointerMaps"]); x < len(f.funcdata) {
-		args := region{p: p, a: f.funcdata[x], typ: "runtime.stackmap"}
+		args := region{p: p, a: f.funcdata[x], typ: p.findType("runtime.stackmap")}
 		n := args.Field("n").Int32()       // # of bitmaps
 		nbit := args.Field("nbit").Int32() // # of bits per bitmap
 		idx := f.stackMap.find(off)

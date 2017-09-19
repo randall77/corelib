@@ -77,7 +77,7 @@ func (p *Process) readCore(core *os.File) error {
 		return err
 	}
 	if e.Type != elf.ET_CORE {
-		return fmt.Errorf("%s is not a core file", core)
+		return fmt.Errorf("%s is not a core file", core.Name())
 	}
 	switch e.Class {
 	case elf.ELFCLASS32:
