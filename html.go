@@ -49,7 +49,7 @@ func serveHtml(c *gocore.Program) {
 		}
 
 		fmt.Fprintf(w, "<table>\n")
-		fmt.Fprintf(w, "<tr><th align=left>field</th><th align=left>type</th><th align=left>value</th></tr>\n")
+		fmt.Fprintf(w, "<tr><th align=left>field</th><th align=left colspan=\"2\">type</th><th align=left>value</th></tr>\n")
 		var end int64
 		if x.Type != nil {
 			n := x.Size / x.Type.Size
@@ -124,7 +124,7 @@ func serveHtml(c *gocore.Program) {
 			fmt.Fprintf(w, "<h3>%s+%d</h3>\n", f.Func().Name(), f.PC().Sub(f.Func().Entry()))
 			// TODO: convert fn+off to file+lineno.
 			fmt.Fprintf(w, "<table>\n")
-			fmt.Fprintf(w, "<tr><th align=left>field</th><th align=left>type</th><th align=left>value</th></tr>\n")
+			fmt.Fprintf(w, "<tr><th align=left>field</th><th align=left colspan=\"2\">type</th><th align=left>value</th></tr>\n")
 			for _, r := range f.Roots() {
 				htmlObject(w, c, r.Name, r.Addr, r.Type, r.Live)
 			}
@@ -135,7 +135,7 @@ func serveHtml(c *gocore.Program) {
 		fmt.Fprintf(w, "<h1>globals</h1>\n")
 		tableStyle(w)
 		fmt.Fprintf(w, "<table>\n")
-		fmt.Fprintf(w, "<tr><th align=left>field</th><th align=left>type</th><th align=left>value</th></tr>\n")
+		fmt.Fprintf(w, "<tr><th align=left>field</th><th align=left colspan=\"2\">type</th><th align=left>value</th></tr>\n")
 		for _, r := range c.Globals() {
 			htmlObject(w, c, r.Name, r.Addr, r.Type, r.Live)
 		}
@@ -169,7 +169,7 @@ func htmlObject(w http.ResponseWriter, c *gocore.Program, name string, a core.Ad
 	switch t.Kind {
 	case gocore.KindBool:
 		v := c.Process().ReadUint8(a) != 0
-		fmt.Fprintf(w, "<tr><td>%s</td><td>%s</td><td>%t</td></tr>\n", name, html.EscapeString(t.String()), v)
+		fmt.Fprintf(w, "<tr><td>%s</td><td colspan=\"2\">%s</td><td>%t</td></tr>\n", name, html.EscapeString(t.String()), v)
 	case gocore.KindInt:
 		var v int64
 		switch t.Size {
@@ -182,7 +182,7 @@ func htmlObject(w http.ResponseWriter, c *gocore.Program, name string, a core.Ad
 		default:
 			v = c.Process().ReadInt64(a)
 		}
-		fmt.Fprintf(w, "<tr><td>%s</td><td>%s</td><td>%d</td></tr>\n", name, html.EscapeString(t.String()), v)
+		fmt.Fprintf(w, "<tr><td>%s</td><td colspan=\"2\">%s</td><td>%d</td></tr>\n", name, html.EscapeString(t.String()), v)
 	case gocore.KindUint:
 		var v uint64
 		switch t.Size {
@@ -195,7 +195,7 @@ func htmlObject(w http.ResponseWriter, c *gocore.Program, name string, a core.Ad
 		default:
 			v = c.Process().ReadUint64(a)
 		}
-		fmt.Fprintf(w, "<tr><td>%s</td><td>%s</td><td>%d</td></tr>\n", name, html.EscapeString(t.String()), v)
+		fmt.Fprintf(w, "<tr><td>%s</td><td colspan=\"2\">%s</td><td>%d</td></tr>\n", name, html.EscapeString(t.String()), v)
 	case gocore.KindFloat:
 		var v float64
 		switch t.Size {
@@ -204,7 +204,7 @@ func htmlObject(w http.ResponseWriter, c *gocore.Program, name string, a core.Ad
 		default:
 			v = math.Float64frombits(c.Process().ReadUint64(a))
 		}
-		fmt.Fprintf(w, "<tr><td>%s</td><td>%s</td><td>%f</td></tr>\n", name, html.EscapeString(t.String()), v)
+		fmt.Fprintf(w, "<tr><td>%s</td><td colspan=\"2\">%s</td><td>%f</td></tr>\n", name, html.EscapeString(t.String()), v)
 	case gocore.KindComplex:
 		var v complex128
 		switch t.Size {
@@ -218,17 +218,17 @@ func htmlObject(w http.ResponseWriter, c *gocore.Program, name string, a core.Ad
 				math.Float64frombits(c.Process().ReadUint64(a)),
 				math.Float64frombits(c.Process().ReadUint64(a.Add(8))))
 		}
-		fmt.Fprintf(w, "<tr><td>%s</td><td>%s</td><td>%f</td></tr>\n", name, html.EscapeString(t.String()), v)
+		fmt.Fprintf(w, "<tr><td>%s</td><td colspan=\"2\">%s</td><td>%f</td></tr>\n", name, html.EscapeString(t.String()), v)
 	case gocore.KindEface:
-		fmt.Fprintf(w, "<tr><td>%s</td><td>*runtime._type</td><td>%s</td></tr>\n", name, htmlPointerAt(c, a, live))
-		fmt.Fprintf(w, "<tr><td>%s</td><td>unsafe.Pointer</td><td>%s</td></tr>\n", name, htmlPointerAt(c, a.Add(c.Process().PtrSize()), live))
+		fmt.Fprintf(w, "<tr><td rowspan=\"2\">%s</td><td rowspan=\"2\">interface{}</td><td>*runtime._type</td><td>%s</td></tr>\n", name, htmlPointerAt(c, a, live))
+		fmt.Fprintf(w, "<tr><td>unsafe.Pointer</td><td>%s</td></tr>\n", htmlPointerAt(c, a.Add(c.Process().PtrSize()), live))
 	case gocore.KindIface:
-		fmt.Fprintf(w, "<tr><td>%s</td><td>*runtime.itab</td><td>%s</td></tr>\n", name, htmlPointerAt(c, a, live))
-		fmt.Fprintf(w, "<tr><td>%s</td><td>unsafe.Pointer</td><td>%s</td></tr>\n", name, htmlPointerAt(c, a.Add(c.Process().PtrSize()), live))
+		fmt.Fprintf(w, "<tr><td rowspan=\"2\">%s</td><td rowspan=\"2\">interface{...}</td><td>*runtime.itab</td><td>%s</td></tr>\n", name, htmlPointerAt(c, a, live))
+		fmt.Fprintf(w, "<tr><td>unsafe.Pointer</td><td>%s</td></tr>\n", htmlPointerAt(c, a.Add(c.Process().PtrSize()), live))
 	case gocore.KindPtr:
-		fmt.Fprintf(w, "<tr><td>%s</td><td>%s</td><td>%s</td></tr>\n", name, html.EscapeString(t.String()), htmlPointerAt(c, a, live))
+		fmt.Fprintf(w, "<tr><td>%s</td><td colspan=\"2\">%s</td><td>%s</td></tr>\n", name, html.EscapeString(t.String()), htmlPointerAt(c, a, live))
 	case gocore.KindFunc:
-		fmt.Fprintf(w, "<tr><td>%s</td><td>%s</td><td>%s</td>", name, html.EscapeString(t.String()), htmlPointerAt(c, a, live))
+		fmt.Fprintf(w, "<tr><td>%s</td><td colspan=\"2\">%s</td><td>%s</td>", name, html.EscapeString(t.String()), htmlPointerAt(c, a, live))
 		if fn := c.Process().ReadPtr(a); fn != 0 {
 			pc := c.Process().ReadPtr(fn)
 			if f := c.FindFunc(pc); f != nil && f.Entry() == pc {
@@ -238,7 +238,7 @@ func htmlObject(w http.ResponseWriter, c *gocore.Program, name string, a core.Ad
 		fmt.Fprintf(w, "</tr>\n")
 	case gocore.KindString:
 		n := c.Process().ReadInt(a.Add(c.Process().PtrSize()))
-		fmt.Fprintf(w, "<tr><td>%s.ptr</td><td>*uint8</td><td>%s</td>", name, htmlPointerAt(c, a, live))
+		fmt.Fprintf(w, "<tr><td rowspan=\"2\">%s</td><td rowspan=\"2\">string</td><td>*uint8</td><td>%s</td>", name, htmlPointerAt(c, a, live))
 		if live == nil || live[a] {
 			if n > 0 {
 				n2 := n
@@ -255,11 +255,11 @@ func htmlObject(w http.ResponseWriter, c *gocore.Program, name string, a core.Ad
 			}
 		}
 		fmt.Fprintf(w, "</tr>\n")
-		fmt.Fprintf(w, "<tr><td>%s.len</td><td>int</td><td>%d</td></tr>\n", name, n)
+		fmt.Fprintf(w, "<tr><td>int</td><td>%d</td></tr>\n", n)
 	case gocore.KindSlice:
-		fmt.Fprintf(w, "<tr><td>%s.ptr</td><td>*%s</td><td>%s</td></tr>\n", name, t.Elem, htmlPointerAt(c, a, live))
-		fmt.Fprintf(w, "<tr><td>%s.len</td><td>int</td><td>%d</td></tr>\n", name, c.Process().ReadInt(a.Add(c.Process().PtrSize())))
-		fmt.Fprintf(w, "<tr><td>%s.cap</td><td>int</td><td>%d</td></tr>\n", name, c.Process().ReadInt(a.Add(c.Process().PtrSize()*2)))
+		fmt.Fprintf(w, "<tr><td rowspan=\"3\">%s</td><td rowspan=\"3\">%s</td><td>*%s</td><td>%s</td></tr>\n", name, t, t.Elem, htmlPointerAt(c, a, live))
+		fmt.Fprintf(w, "<tr><td>int</td><td>%d</td></tr>\n", c.Process().ReadInt(a.Add(c.Process().PtrSize())))
+		fmt.Fprintf(w, "<tr><td>int</td><td>%d</td></tr>\n", c.Process().ReadInt(a.Add(c.Process().PtrSize()*2)))
 	case gocore.KindArray:
 		s := t.Elem.Size
 		n := t.Count
