@@ -53,7 +53,7 @@ func (p *Program) readObjects() {
 		for _, s := range [2]string{"data", "bss"} {
 			min := core.Address(m.r.Field(s).Uintptr())
 			max := core.Address(m.r.Field("e" + s).Uintptr())
-			gc := core.Address(m.r.Field("gc" + s).Uintptr())
+			gc := m.r.Field("gc" + s + "mask").Field("bytedata").Address()
 			n := max.Sub(min) / ptrSize
 			for i := int64(0); i < n; i++ {
 				if p.proc.ReadUint8(gc.Add(i/8))>>uint(i%8)&1 != 0 {
