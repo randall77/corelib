@@ -53,10 +53,10 @@ func Core(proc *core.Process) (p *Program, err error) {
 	// Read all the data that depends on runtime globals.
 	p.buildVersion = p.rtGlobals["buildVersion"].String()
 	p.readModules()
-	p.readStackVars()
 	p.readSpans()
 	p.readMs()
 	p.readGs()
+	p.readStackVars()
 	p.readObjects()
 	p.typeHeap()
 
