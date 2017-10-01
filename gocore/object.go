@@ -11,8 +11,10 @@ import (
 func (p *Program) readObjects() {
 	ptrSize := p.proc.PtrSize()
 
-	// Number of objects in p.objects that have been scanned.
+	// number of objects in p.objects that have been scanned
 	n := 0
+	// total size of live objects
+	var live int64
 
 	// Function to call when we find a new pointer.
 	add := func(x core.Address) {
@@ -37,6 +39,7 @@ func (p *Program) readObjects() {
 		}
 		s.mark |= uint64(1) << b
 		p.objects = append(p.objects, Object{Addr: x, Size: s.size})
+		live += s.size
 	}
 
 	// Goroutine roots
@@ -94,6 +97,13 @@ func (p *Program) readObjects() {
 		for j := int64(0); j < x.Size; j += 512 {
 			p.heapInfo[x.Addr.Add(j).Sub(p.arenaStart)/512].firstIdx = i
 		}
+	}
+
+	// Update stats to include the live/garbage distinction.
+	alloc := p.Stats().Child("heap").Child("in use spans").Child("alloc")
+	alloc.Children = []*Stats{
+		&Stats{"live", live, nil},
+		&Stats{"garbage", alloc.Size - live, nil},
 	}
 }
 

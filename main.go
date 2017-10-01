@@ -86,6 +86,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "%s: unknown command %s\n", os.Args[0], cmd)
 		fmt.Fprintf(os.Stderr, "Run 'corelib help' for usage.\n")
 		os.Exit(2)
+
 	case "overview":
 		t := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', 0)
 		fmt.Fprintf(t, "arch\t%s\n", p.Arch())
@@ -96,6 +97,7 @@ func main() {
 		}
 		fmt.Fprintf(t, "memory\t%.1f MB\n", float64(total)/(1<<20))
 		t.Flush()
+
 	case "mappings":
 		t := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.AlignRight)
 		fmt.Fprintf(t, "min\tmax\tperm\tsource\toriginal\t\n")
@@ -125,6 +127,7 @@ func main() {
 			fmt.Fprintf(t, "\t\n")
 		}
 		t.Flush()
+
 	case "goroutines":
 
 		for _, g := range c.Goroutines() {
@@ -144,6 +147,7 @@ func main() {
 				fmt.Printf("  %016x %016x %s%s\n", f.Min(), f.Max(), f.Func().Name(), adj)
 			}
 		}
+
 	case "histogram":
 		// Produce an object histogram (bytes per type).
 		type bucket struct {
@@ -188,17 +192,6 @@ func main() {
 		t.Flush()
 
 	case "breakdown":
-		var total int64
-		c.ForEachObject(func(x *gocore.Object) bool {
-			total += x.Size
-			return true
-		})
-		alloc := c.Stats().Child("heap").Child("in use spans").Child("alloc")
-		alloc.Children = []*gocore.Stats{
-			&gocore.Stats{"live", total, nil},
-			&gocore.Stats{"garbage", alloc.Size - total, nil},
-		}
-
 		t := tabwriter.NewWriter(os.Stdout, 0, 8, 1, ' ', tabwriter.AlignRight)
 		all := c.Stats().Size
 		var printStat func(*gocore.Stats, string)
@@ -217,8 +210,8 @@ func main() {
 		}
 		printStat(c.Stats(), "")
 		t.Flush()
-	case "objgraph":
 
+	case "objgraph":
 		// Dump object graph to output file.
 		w, err := os.Create("tmp.dot")
 		if err != nil {
@@ -273,6 +266,7 @@ func main() {
 		})
 		fmt.Fprintf(w, "}")
 		w.Close()
+
 	case "objects":
 		c.ForEachObject(func(x *gocore.Object) bool {
 			fmt.Printf("%16x %s\n", x.Addr, typeName(x))
