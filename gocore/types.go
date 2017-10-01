@@ -40,7 +40,6 @@ type Program struct {
 
 	// All live objects in the heap.
 	objects []Object
-	objPtrs []*Object
 
 	// memory usage by category
 	stats *Stats
@@ -59,9 +58,14 @@ func (p *Program) Goroutines() []*Goroutine {
 	return p.goroutines
 }
 
-// Objects returns all live objects in the heap.
-func (p *Program) Objects() []*Object {
-	return p.objPtrs
+// ForEachObject calls fn with each object in the Go heap.
+// If fn returns false, ForEachObject returns immediately.
+func (p *Program) ForEachObject(fn func(o *Object) bool) {
+	for i := 0; i < len(p.objects); i++ {
+		if !fn(&p.objects[i]) {
+			return
+		}
+	}
 }
 
 // Stats returns a breakdown of the program's memory use by category.

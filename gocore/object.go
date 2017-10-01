@@ -95,12 +95,6 @@ func (p *Program) readObjects() {
 			p.heapInfo[x.Addr.Add(j).Sub(p.arenaStart)/512].firstIdx = i
 		}
 	}
-
-	// Build array-of-pointers for easy iteration over objects.
-	p.objPtrs = make([]*Object, len(p.objects))
-	for i := range p.objects {
-		p.objPtrs[i] = &p.objects[i]
-	}
 }
 
 // isPtr reports whether the inferior at address a contains a pointer.

@@ -153,29 +153,30 @@ func main() {
 		}
 		var buckets []*bucket
 		m := map[string]*bucket{}
-		for _, obj := range c.Objects() {
+		c.ForEachObject(func(x *gocore.Object) bool {
 			var name string
-			if obj.Type == nil {
-				name = fmt.Sprintf("unk%d", obj.Size)
+			if x.Type == nil {
+				name = fmt.Sprintf("unk%d", x.Size)
 			} else {
-				name = obj.Type.String()
-				n := obj.Size / obj.Type.Size
+				name = x.Type.String()
+				n := x.Size / x.Type.Size
 				if n > 1 {
-					if obj.Repeat < n {
-						name = fmt.Sprintf("[%d+%d?]%s", obj.Repeat, n-obj.Repeat, name)
+					if x.Repeat < n {
+						name = fmt.Sprintf("[%d+%d?]%s", x.Repeat, n-x.Repeat, name)
 					} else {
-						name = fmt.Sprintf("[%d]%s", obj.Repeat, name)
+						name = fmt.Sprintf("[%d]%s", x.Repeat, name)
 					}
 				}
 			}
 			b := m[name]
 			if b == nil {
-				b = &bucket{name: name, size: obj.Size}
+				b = &bucket{name: name, size: x.Size}
 				buckets = append(buckets, b)
 				m[name] = b
 			}
 			b.count++
-		}
+			return true
+		})
 		sort.Slice(buckets, func(i, j int) bool {
 			return buckets[i].size*buckets[i].count > buckets[j].size*buckets[j].count
 		})
@@ -188,9 +189,10 @@ func main() {
 
 	case "breakdown":
 		var total int64
-		for _, obj := range c.Objects() {
-			total += obj.Size
-		}
+		c.ForEachObject(func(x *gocore.Object) bool {
+			total += x.Size
+			return true
+		})
 		alloc := c.Stats().Child("heap").Child("in use spans").Child("alloc")
 		alloc.Children = []*gocore.Stats{
 			&gocore.Stats{"live", total, nil},
@@ -257,7 +259,7 @@ func main() {
 				}
 			}
 		}
-		for _, x := range c.Objects() {
+		c.ForEachObject(func(x *gocore.Object) bool {
 			fmt.Fprintf(w, "o%x [label=\"%s\\n%d\"]\n", x.Addr, typeName(x), x.Size)
 			c.ForEachPtr(x, func(i int64, y *gocore.Object, j int64) bool {
 				fmt.Fprintf(w, "o%x -> o%x [label=\"%s\"", x.Addr, y.Addr, fieldName(x, i))
@@ -267,13 +269,15 @@ func main() {
 				fmt.Fprintf(w, "]\n")
 				return true
 			})
-		}
+			return true
+		})
 		fmt.Fprintf(w, "}")
 		w.Close()
 	case "objects":
-		for _, x := range c.Objects() {
+		c.ForEachObject(func(x *gocore.Object) bool {
 			fmt.Printf("%16x %s\n", x.Addr, typeName(x))
-		}
+			return true
+		})
 
 	case "reachable":
 		if len(args) < 3 {
@@ -299,7 +303,7 @@ func main() {
 
 		for {
 			changed := false
-			for _, x := range c.Objects() {
+			c.ForEachObject(func(x *gocore.Object) bool {
 				c.ForEachPtr(x, func(_ int64, y *gocore.Object, _ int64) bool {
 					if m[y] != 0 && (m[x] == 0 || m[x] > m[y]+1) {
 						m[x] = m[y] + 1
@@ -307,7 +311,8 @@ func main() {
 					}
 					return true
 				})
-			}
+				return true
+			})
 			if !changed {
 				break
 			}
