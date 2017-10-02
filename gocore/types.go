@@ -307,5 +307,5 @@ type heapInfo struct {
 	base     core.Address // start of the span containing this heap region
 	size     int64        // size of objects in the span
 	mark     uint64       // 64 mark bits, one for every 8 bytes
-	firstIdx int          // the index of the first object that starts in this region
+	firstIdx int          // the index of the first object that starts in this region (-1 if none)
 }

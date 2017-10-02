@@ -82,8 +82,10 @@ func (p *Process) readCore(core *os.File) error {
 	switch e.Class {
 	case elf.ELFCLASS32:
 		p.ptrSize = 4
+		p.logPtrSize = 2
 	case elf.ELFCLASS64:
 		p.ptrSize = 8
+		p.logPtrSize = 3
 	default:
 		return fmt.Errorf("unknown elf class %s\n", e.Class)
 	}
@@ -440,39 +442,65 @@ func (p *Process) ReadAt(b []byte, a Address) {
 
 // ReadUint8 returns a uint8 read from address a of the inferior.
 func (p *Process) ReadUint8(a Address) uint8 {
-	var buf [1]byte
-	p.ReadAt(buf[:], a)
-	return buf[0]
+	m := p.findMapping(a)
+	if m == nil {
+		panic(fmt.Errorf("address %x is not mapped in the core file", a))
+	}
+	return m.contents[a.Sub(m.min)]
 }
 
 // ReadUint16 returns a uint16 read from address a of the inferior.
 func (p *Process) ReadUint16(a Address) uint16 {
-	var buf [2]byte
-	p.ReadAt(buf[:], a)
-	if p.littleEndian {
-		return binary.LittleEndian.Uint16(buf[:])
+	m := p.findMapping(a)
+	if m == nil {
+		panic(fmt.Errorf("address %x is not mapped in the core file", a))
 	}
-	return binary.BigEndian.Uint16(buf[:])
+	b := m.contents[a.Sub(m.min):]
+	if len(b) < 2 {
+		var buf [2]byte
+		b = buf[:]
+		p.ReadAt(b, a)
+	}
+	if p.littleEndian {
+		return binary.LittleEndian.Uint16(b)
+	}
+	return binary.BigEndian.Uint16(b)
 }
 
 // ReadUint32 returns a uint32 read from address a of the inferior.
 func (p *Process) ReadUint32(a Address) uint32 {
-	var buf [4]byte
-	p.ReadAt(buf[:], a)
-	if p.littleEndian {
-		return binary.LittleEndian.Uint32(buf[:])
+	m := p.findMapping(a)
+	if m == nil {
+		panic(fmt.Errorf("address %x is not mapped in the core file", a))
 	}
-	return binary.BigEndian.Uint32(buf[:])
+	b := m.contents[a.Sub(m.min):]
+	if len(b) < 4 {
+		var buf [4]byte
+		b = buf[:]
+		p.ReadAt(b, a)
+	}
+	if p.littleEndian {
+		return binary.LittleEndian.Uint32(b)
+	}
+	return binary.BigEndian.Uint32(b)
 }
 
 // ReadUint64 returns a uint64 read from address a of the inferior.
 func (p *Process) ReadUint64(a Address) uint64 {
-	var buf [8]byte
-	p.ReadAt(buf[:], a)
-	if p.littleEndian {
-		return binary.LittleEndian.Uint64(buf[:])
+	m := p.findMapping(a)
+	if m == nil {
+		panic(fmt.Errorf("address %x is not mapped in the core file", a))
 	}
-	return binary.BigEndian.Uint64(buf[:])
+	b := m.contents[a.Sub(m.min):]
+	if len(b) < 8 {
+		var buf [8]byte
+		b = buf[:]
+		p.ReadAt(b, a)
+	}
+	if p.littleEndian {
+		return binary.LittleEndian.Uint64(b)
+	}
+	return binary.BigEndian.Uint64(b)
 }
 
 // ReadInt8 returns an int8 read from address a of the inferior.

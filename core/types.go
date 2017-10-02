@@ -62,6 +62,7 @@ type Process struct {
 	threads      []*Thread          // os threads (TODO: map from pid?)
 	arch         string             // amd64, ...
 	ptrSize      int64              // 4 or 8
+	logPtrSize   uint               // 2 or 3
 	byteOrder    binary.ByteOrder   //
 	littleEndian bool               // redundant with byteOrder
 	syms         map[string]Address // symbols (could be empty if executable is stripped)
@@ -97,6 +98,9 @@ func (p *Process) Arch() string {
 // PtrSize returns the size in bytes of a pointer in the inferior.
 func (p *Process) PtrSize() int64 {
 	return p.ptrSize
+}
+func (p *Process) LogPtrSize() uint {
+	return p.logPtrSize
 }
 
 func (p *Process) ByteOrder() binary.ByteOrder {
