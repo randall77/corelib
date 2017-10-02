@@ -180,6 +180,7 @@ func (p *Program) Size(x Object) int64 {
 
 // Type returns the type and repeat count for the object x.
 // x contains at least repeat copies of the returned type.
+// FlagTypes must have been passed to Core when p was constructed.
 func (p *Program) Type(x Object) (*Type, int64) {
 	i, _ := p.findObjectIndex(core.Address(x))
 	return p.types[i].Type, p.types[i].Repeat

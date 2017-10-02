@@ -6,6 +6,12 @@ import (
 	"github.com/randall77/corelib/core"
 )
 
+type Flags uint8
+
+const (
+	FlagTypes Flags = 1 << iota
+)
+
 type Program struct {
 	proc *core.Process
 
@@ -48,7 +54,8 @@ type Program struct {
 
 	globals []*Root
 
-	// Information about objects, indexed by Object
+	// Types of each object, indexed by object index.
+	// Only initialized if FlagTypes is passed to Core.
 	types []typeInfo
 }
 

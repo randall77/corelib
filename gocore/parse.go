@@ -9,7 +9,8 @@ import (
 )
 
 // Core takes a loaded core file and extracts Go information from it.
-func Core(proc *core.Process) (p *Program, err error) {
+// flags is a bitmask of data that should be extracted from the core.
+func Core(proc *core.Process, flags Flags) (p *Program, err error) {
 	// Make sure we have DWARF info.
 	if _, err := proc.DWARF(); err != nil {
 		return nil, err
@@ -58,7 +59,9 @@ func Core(proc *core.Process) (p *Program, err error) {
 	p.readGs()
 	p.readStackVars()
 	p.readObjects()
-	p.typeHeap()
+	if flags&FlagTypes != 0 {
+		p.typeHeap()
+	}
 
 	return p, nil
 }

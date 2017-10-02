@@ -63,6 +63,28 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
+	var flags gocore.Flags
+	switch cmd {
+	default:
+		fmt.Fprintf(os.Stderr, "%s: unknown command %s\n", os.Args[0], cmd)
+		fmt.Fprintf(os.Stderr, "Run 'corelib help' for usage.\n")
+		os.Exit(2)
+	case "overview":
+	case "mappings":
+	case "goroutines":
+	case "histogram":
+		flags = gocore.FlagTypes
+	case "breakdown":
+	case "objgraph":
+		flags = gocore.FlagTypes
+	case "objects":
+		flags = gocore.FlagTypes
+	case "reachable":
+		flags = gocore.FlagTypes
+	case "html":
+		flags = gocore.FlagTypes
+	}
+
 	// All commands other than "help" need a core file.
 	if len(args) < 2 {
 		fmt.Fprintf(os.Stderr, "%s: no core dump specified for command %s\n", os.Args[0], cmd)
@@ -75,7 +97,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
-	c, err := gocore.Core(p)
+	c, err := gocore.Core(p, flags)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
