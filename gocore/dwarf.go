@@ -275,9 +275,9 @@ func (c typeChunk) matchingAlignment(d typeChunk) bool {
 		panic("can't check alignment of differently typed chunks")
 	}
 	if c.a >= d.a {
-		return d.a.Sub(c.a)%c.t.Size != 0
+		return d.a.Sub(c.a)%c.t.Size == 0
 	}
-	return c.a.Sub(d.a)%c.t.Size != 0
+	return c.a.Sub(d.a)%c.t.Size == 0
 }
 
 func (c typeChunk) merge(d typeChunk) typeChunk {
@@ -326,9 +326,6 @@ func (p *Program) typeHeap() {
 	add := func(a core.Address, t *Type, r int64) {
 		if a == 0 { // nil pointer
 			return
-		}
-		if t == nil {
-			return // TODO: why?
 		}
 		i, _ := p.findObjectIndex(a)
 		if i < 0 { // pointer doesn't point to an object in the Go heap
