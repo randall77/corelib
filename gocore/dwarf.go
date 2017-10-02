@@ -255,17 +255,19 @@ func runtimeName(dt dwarf.Type) string {
 	}
 }
 
+// A typeChunk records type information for a portion of an object.
+// Similar to a typeInfo, but it has an offset so it can be used for interior typings.
 type typeChunk struct {
-	a core.Address // address in object
-	t *Type        // type
-	r int64        // repeat count
+	off int64
+	t   *Type
+	r   int64
 }
 
-func (c typeChunk) min() core.Address {
-	return c.a
+func (c typeChunk) min() int64 {
+	return c.off
 }
-func (c typeChunk) max() core.Address {
-	return c.a.Add(c.r * c.t.Size)
+func (c typeChunk) max() int64 {
+	return c.off + c.r*c.t.Size
 }
 func (c typeChunk) size() int64 {
 	return c.r * c.t.Size
@@ -274,52 +276,52 @@ func (c typeChunk) matchingAlignment(d typeChunk) bool {
 	if c.t != d.t {
 		panic("can't check alignment of differently typed chunks")
 	}
-	if c.a >= d.a {
-		return d.a.Sub(c.a)%c.t.Size == 0
-	}
-	return c.a.Sub(d.a)%c.t.Size == 0
+	return (c.off-d.off)%c.t.Size == 0
 }
 
 func (c typeChunk) merge(d typeChunk) typeChunk {
-	if c.t != d.t {
+	t := c.t
+	if t != d.t {
 		panic("can't merge chunks with different types")
 	}
-	if c.a <= d.a {
-		delta := d.a.Sub(c.a)
-		if delta%c.t.Size != 0 {
-			panic("can't merge poorly aligned chunks")
-		}
-		return typeChunk{a: c.a, t: c.t, r: d.r + delta/c.t.Size}
-	}
-	delta := c.a.Sub(d.a)
-	if delta%c.t.Size != 0 {
+	size := t.Size
+	if (c.off-d.off)%size != 0 {
 		panic("can't merge poorly aligned chunks")
 	}
-	return typeChunk{a: d.a, t: c.t, r: c.r + delta/c.t.Size}
+	min := c.min()
+	max := c.max()
+	if x := d.min(); x < min {
+		min = x
+	}
+	if x := d.max(); x > max {
+		max = x
+	}
+	return typeChunk{off: min, t: t, r: (max - min) / size}
 }
 func (c typeChunk) String() string {
-	return fmt.Sprintf("%x[%d]%s", c.a, c.r, c.t)
+	return fmt.Sprintf("%x[%d]%s", c.off, c.r, c.t)
 }
 
 // typeHeap tries to label all the heap objects with types.
 func (p *Program) typeHeap() {
-	nobj := p.nObj
+	// Type info for the start of each object. a.k.a. "0 offset" typings.
+	p.types = make([]typeInfo, p.nObj)
 
-	// Mapping from object index to the type info we have for that object.
+	// Type info for the interior of objects, a.k.a. ">0 offset" typings.
 	// Type information is arranged in chunks. Chunks are stored in an
 	// arbitrary order, and are guaranteed to not overlap. If types are
 	// equal, chunks are also guaranteed not to abut.
-	types := make([][]typeChunk, nobj)
-
-	// The common case is that objects will have only one typeChunk.
-	// Allocate storage for one typeChunk per object upfront.
-	typeStore := make([]typeChunk, nobj)
-	for i := 0; i < nobj; i++ {
-		types[i] = typeStore[i:i : i+1]
-	}
+	// A similar invariant holds between the 0-offset typing and the interior typings.
+	// Interior typings are kept separate because they hopefully are rare.
+	interior := map[int][]typeChunk{}
 
 	// Typings we know about but haven't scanned yet.
-	var work []typeChunk
+	type workRecord struct {
+		a core.Address
+		t *Type
+		r int64
+	}
+	var work []workRecord
 
 	// add records the fact that we know the object at address a has
 	// r copies of type t.
@@ -327,15 +329,43 @@ func (p *Program) typeHeap() {
 		if a == 0 { // nil pointer
 			return
 		}
-		i, _ := p.findObjectIndex(a)
+		i, off := p.findObjectIndex(a)
 		if i < 0 { // pointer doesn't point to an object in the Go heap
 			return
 		}
-		c := typeChunk{a: a, t: t, r: r}
+		if off == 0 {
+			// We have a 0-offset typing. Replace existing 0-offset typing
+			// if the new one is larger.
+			ot := p.types[i].t
+			or := p.types[i].r
+			if ot == nil || r*t.Size > or*ot.Size {
+				if t == ot {
+					// Scan just the new section.
+					work = append(work, workRecord{
+						a: a.Add(or * ot.Size),
+						t: t,
+						r: r - or,
+					})
+				} else {
+					// Rescan the whole typing using the updated type.
+					work = append(work, workRecord{
+						a: a,
+						t: t,
+						r: r,
+					})
+				}
+				p.types[i].t = t
+				p.types[i].r = r
+			}
+			return
+		}
+
+		// Add an interior typing to object #i.
+		c := typeChunk{off: off, t: t, r: r}
 
 		// Merge the given typing into the chunks we already know.
 		// TODO: this could be O(n) per insert if there are lots of internal pointers.
-		chunks := types[i]
+		chunks := interior[i]
 		newchunks := chunks[:0]
 		addWork := true
 		for _, d := range chunks {
@@ -380,12 +410,16 @@ func (p *Program) typeHeap() {
 		}
 		// Add new chunk to list of chunks for object.
 		newchunks = append(newchunks, c)
-		types[i] = newchunks
+		interior[i] = newchunks
 		// Also arrange to scan the new chunk. Note that if we merged
 		// with an existing chunk (or chunks), those will get rescanned.
 		// Duplicate work, but that's ok. TODO: but could be expensive.
 		if addWork {
-			work = append(work, c)
+			work = append(work, workRecord{
+				a: a.Add(c.off - off),
+				t: c.t,
+				r: c.r,
+			})
 		}
 	}
 
@@ -412,16 +446,35 @@ func (p *Program) typeHeap() {
 		}
 	}
 
-	// Extract types for each object from the result.
-	p.types = make([]typeInfo, nobj)
-	for i, chunks := range types {
+	// Merge any interior typings with the 0-offset typing.
+	for i, chunks := range interior {
+		t := p.types[i].t
+		r := p.types[i].r
+		if t == nil {
+			continue // We have no type info at offset 0.
+		}
 		for _, c := range chunks {
-			_, off := p.FindObject(c.a)
-			if off != 0 {
-				// TODO: report something useful for interior typings.
+			if c.max() <= r*t.Size {
+				// c is completely contained in the 0-offset typing.
 				continue
 			}
-			p.types[i] = typeInfo{Type: c.t, Repeat: c.r}
+			if c.min() < r*t.Size {
+				// Typings overlap. Extend if we can.
+				if c.t == t && c.off%t.Size == 0 {
+					r = c.max() / t.Size
+					p.types[i].r = r
+				}
+				continue
+			}
+			if c.min() == r*t.Size && c.t == t {
+				// Typings abut and agree on base type.
+				// Extend typing and drop c.
+				r += c.r
+				p.types[i].r = r
+				continue
+			}
+			// Note: at this point we throw away any interior typings that weren't
+			// merged with the 0-offset typing.  TODO: make more use of this info.
 		}
 	}
 }
