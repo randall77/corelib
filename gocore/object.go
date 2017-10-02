@@ -146,7 +146,7 @@ func (p *Program) isPtr(a core.Address) bool {
 
 	// Find bit in bitmap. It goes backwards from the end.
 	// Each byte contains pointer/nonpointer bits for 4 words in its low nybble.
-	return p.proc.ReadUint8(p.bitmapEnd.Add(-off>>2-1))>>uint(off&3)&1 != 0
+	return p.proc.ReadUint8(p.bitmapEnd.Add(-(off>>2)-1))>>uint(off&3)&1 != 0
 }
 
 // FindObject finds the object containing a.  Returns that object and the offset within
