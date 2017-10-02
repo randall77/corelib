@@ -303,7 +303,7 @@ func (c typeChunk) String() string {
 
 // typeHeap tries to label all the heap objects with types.
 func (p *Program) typeHeap() {
-	nobj := len(p.objects)
+	nobj := p.nObj
 
 	// Mapping from object index to the type info we have for that object.
 	// Type information is arranged in chunks. Chunks are stored in an
@@ -416,13 +416,16 @@ func (p *Program) typeHeap() {
 	}
 
 	// Extract types for each object from the result.
+	p.types = make([]typeInfo, nobj)
 	for i, chunks := range types {
-		x := &p.objects[i]
-		if len(chunks) == 1 && chunks[0].a == x.Addr {
-			x.Type = chunks[0].t
-			x.Repeat = chunks[0].r
+		for _, c := range chunks {
+			_, off := p.FindObject(c.a)
+			if off != 0 {
+				// TODO: report something useful for interior typings.
+				continue
+			}
+			p.types[i] = typeInfo{Type: c.t, Repeat: c.r}
 		}
-		// TODO: report something useful for various interior typings.
 	}
 }
 

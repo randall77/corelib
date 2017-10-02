@@ -129,7 +129,6 @@ func main() {
 		t.Flush()
 
 	case "goroutines":
-
 		for _, g := range c.Goroutines() {
 			fmt.Printf("G stacksize=%x\n", g.Stack())
 			for _, f := range g.Frames() {
@@ -157,24 +156,11 @@ func main() {
 		}
 		var buckets []*bucket
 		m := map[string]*bucket{}
-		c.ForEachObject(func(x *gocore.Object) bool {
-			var name string
-			if x.Type == nil {
-				name = fmt.Sprintf("unk%d", x.Size)
-			} else {
-				name = x.Type.String()
-				n := x.Size / x.Type.Size
-				if n > 1 {
-					if x.Repeat < n {
-						name = fmt.Sprintf("[%d+%d?]%s", x.Repeat, n-x.Repeat, name)
-					} else {
-						name = fmt.Sprintf("[%d]%s", x.Repeat, name)
-					}
-				}
-			}
+		c.ForEachObject(func(x gocore.Object) bool {
+			name := typeName(c, x)
 			b := m[name]
 			if b == nil {
-				b = &bucket{name: name, size: x.Size}
+				b = &bucket{name: name, size: c.Size(x)}
 				buckets = append(buckets, b)
 				m[name] = b
 			}
@@ -220,12 +206,12 @@ func main() {
 		fmt.Fprintf(w, "digraph {\n")
 		for k, r := range c.Globals() {
 			printed := false
-			c.ForEachRootPtr(r, func(i int64, y *gocore.Object, j int64) bool {
+			c.ForEachRootPtr(r, func(i int64, y gocore.Object, j int64) bool {
 				if !printed {
 					fmt.Fprintf(w, "r%d [label=\"%s\n%s\",shape=hexagon]\n", k, r.Name, r.Type)
 					printed = true
 				}
-				fmt.Fprintf(w, "r%d -> o%x [label=\"%s\"", k, y.Addr, typeFieldName(r.Type, i))
+				fmt.Fprintf(w, "r%d -> o%x [label=\"%s\"", k, c.Addr(y), typeFieldName(r.Type, i))
 				if j != 0 {
 					fmt.Fprintf(w, " ,headlabel=\"+%d\"", j)
 				}
@@ -241,8 +227,8 @@ func main() {
 				fmt.Fprintf(w, "%s -> %s [style=dotted]\n", last, frame)
 				last = frame
 				for _, r := range f.Roots() {
-					c.ForEachRootPtr(r, func(i int64, y *gocore.Object, j int64) bool {
-						fmt.Fprintf(w, "%s -> o%x [label=\"%s%s\"", frame, y.Addr, r.Name, typeFieldName(r.Type, i))
+					c.ForEachRootPtr(r, func(i int64, y gocore.Object, j int64) bool {
+						fmt.Fprintf(w, "%s -> o%x [label=\"%s%s\"", frame, c.Addr(y), r.Name, typeFieldName(r.Type, i))
 						if j != 0 {
 							fmt.Fprintf(w, " ,headlabel=\"+%d\"", j)
 						}
@@ -252,10 +238,12 @@ func main() {
 				}
 			}
 		}
-		c.ForEachObject(func(x *gocore.Object) bool {
-			fmt.Fprintf(w, "o%x [label=\"%s\\n%d\"]\n", x.Addr, typeName(x), x.Size)
-			c.ForEachPtr(x, func(i int64, y *gocore.Object, j int64) bool {
-				fmt.Fprintf(w, "o%x -> o%x [label=\"%s\"", x.Addr, y.Addr, fieldName(x, i))
+		c.ForEachObject(func(x gocore.Object) bool {
+			addr := c.Addr(x)
+			size := c.Size(x)
+			fmt.Fprintf(w, "o%x [label=\"%s\\n%d\"]\n", addr, typeName(c, x), size)
+			c.ForEachPtr(x, func(i int64, y gocore.Object, j int64) bool {
+				fmt.Fprintf(w, "o%x -> o%x [label=\"%s\"", addr, c.Addr(y), fieldName(c, x, i))
 				if j != 0 {
 					fmt.Fprintf(w, ",headlabel=\"+%d\"", j)
 				}
@@ -268,8 +256,8 @@ func main() {
 		w.Close()
 
 	case "objects":
-		c.ForEachObject(func(x *gocore.Object) bool {
-			fmt.Printf("%16x %s\n", x.Addr, typeName(x))
+		c.ForEachObject(func(x gocore.Object) bool {
+			fmt.Printf("%16x %s\n", c.Addr(x), typeName(c, x))
 			return true
 		})
 
@@ -285,20 +273,20 @@ func main() {
 		}
 		a := core.Address(n)
 		obj, _ := c.FindObject(a)
-		if obj == nil {
+		if obj == 0 {
 			fmt.Fprintf(os.Stderr, "can't find object at address %s\n", args[2])
 			os.Exit(1)
 		}
 
 		// Find the set of objects that can reach the query object.
 		// Map value is the minimum distance to query object + 1.
-		m := map[*gocore.Object]int64{}
+		m := map[gocore.Object]int64{}
 		m[obj] = 1
 
 		for {
 			changed := false
-			c.ForEachObject(func(x *gocore.Object) bool {
-				c.ForEachPtr(x, func(_ int64, y *gocore.Object, _ int64) bool {
+			c.ForEachObject(func(x gocore.Object) bool {
+				c.ForEachPtr(x, func(_ int64, y gocore.Object, _ int64) bool {
 					if m[y] != 0 && (m[x] == 0 || m[x] > m[y]+1) {
 						m[x] = m[y] + 1
 						changed = true
@@ -318,7 +306,7 @@ func main() {
 		var minf *gocore.Frame
 		var ming *gocore.Goroutine
 		for _, r := range c.Globals() {
-			c.ForEachRootPtr(r, func(_ int64, y *gocore.Object, _ int64) bool {
+			c.ForEachRootPtr(r, func(_ int64, y gocore.Object, _ int64) bool {
 				if m[y] != 0 && (mind == 0 || m[y] < mind) {
 					mind = m[y]
 					minr = r
@@ -331,7 +319,7 @@ func main() {
 		for _, g := range c.Goroutines() {
 			for _, f := range g.Frames() {
 				for _, r := range f.Roots() {
-					c.ForEachRootPtr(r, func(_ int64, y *gocore.Object, _ int64) bool {
+					c.ForEachRootPtr(r, func(_ int64, y gocore.Object, _ int64) bool {
 						if m[y] != 0 && (mind == 0 || m[y] < mind) {
 							mind = m[y]
 							minr = r
@@ -360,8 +348,8 @@ func main() {
 				}
 			}
 		}
-		var x *gocore.Object
-		c.ForEachRootPtr(minr, func(i int64, y *gocore.Object, j int64) bool {
+		var x gocore.Object
+		c.ForEachRootPtr(minr, func(i int64, y gocore.Object, j int64) bool {
 			if m[y] != mind {
 				return true
 			}
@@ -374,12 +362,12 @@ func main() {
 			return false
 		})
 		for d := mind - 1; d != 0; d-- {
-			fmt.Printf("%x %s", x.Addr, typeName(x))
-			c.ForEachPtr(x, func(i int64, y *gocore.Object, j int64) bool {
+			fmt.Printf("%x %s", c.Addr(x), typeName(c, x))
+			c.ForEachPtr(x, func(i int64, y gocore.Object, j int64) bool {
 				if m[y] != d {
 					return true
 				}
-				fmt.Printf(" %s ->", fieldName(x, i))
+				fmt.Printf(" %s ->", fieldName(c, x, i))
 				if j != 0 {
 					fmt.Printf(" +%d", j)
 				}
@@ -388,7 +376,7 @@ func main() {
 				return false
 			})
 		}
-		fmt.Printf("%x %s\n", x.Addr, typeName(x))
+		fmt.Printf("%x %s\n", c.Addr(x), typeName(c, x))
 
 	case "html":
 		serveHtml(c)
@@ -396,43 +384,47 @@ func main() {
 }
 
 // typeName returns a string representing the type of this object.
-func typeName(x *gocore.Object) string {
-	if x.Type == nil {
-		return fmt.Sprintf("unk%d", x.Size)
+func typeName(c *gocore.Program, x gocore.Object) string {
+	size := c.Size(x)
+	typ, repeat := c.Type(x)
+	if typ == nil {
+		return fmt.Sprintf("unk%d", size)
 	}
-	name := x.Type.String()
-	n := x.Size / x.Type.Size
+	name := typ.String()
+	n := size / typ.Size
 	if n > 1 {
-		if x.Repeat < n {
-			name = fmt.Sprintf("[%d+%d?]%s", x.Repeat, n-x.Repeat, name)
+		if repeat < n {
+			name = fmt.Sprintf("[%d+%d?]%s", repeat, n-repeat, name)
 		} else {
-			name = fmt.Sprintf("[%d]%s", x.Repeat, name)
+			name = fmt.Sprintf("[%d]%s", repeat, name)
 		}
 	}
 	return name
 }
 
 // fieldName returns the name of the field at offset off in x.
-func fieldName(x *gocore.Object, off int64) string {
-	if x.Type == nil {
+func fieldName(c *gocore.Program, x gocore.Object, off int64) string {
+	size := c.Size(x)
+	typ, repeat := c.Type(x)
+	if typ == nil {
 		return fmt.Sprintf("f%d", off)
 	}
-	n := x.Size / x.Type.Size
-	i := off / x.Type.Size
-	if i == 0 && x.Repeat == 1 {
+	n := size / typ.Size
+	i := off / typ.Size
+	if i == 0 && repeat == 1 {
 		// Probably a singleton object, no need for array notation.
-		return typeFieldName(x.Type, off)
+		return typeFieldName(typ, off)
 	}
 	if i >= n {
 		// Partial space at the end of the object - the type can't be complete.
 		return fmt.Sprintf("f%d", off)
 	}
 	q := ""
-	if i >= x.Repeat {
+	if i >= repeat {
 		// Past the known repeat section, add a ? because we're not sure about the type.
 		q = "?"
 	}
-	return fmt.Sprintf("[%d]%s%s", i, typeFieldName(x.Type, off-i*x.Type.Size), q)
+	return fmt.Sprintf("[%d]%s%s", i, typeFieldName(typ, off-i*typ.Size), q)
 }
 
 // typeFieldName returns the name of the field at offset off in t.

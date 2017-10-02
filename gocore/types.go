@@ -15,6 +15,9 @@ type Program struct {
 
 	heapInfo []heapInfo
 
+	// number of live objects
+	nObj int
+
 	goroutines []*Goroutine
 
 	// runtime info
@@ -38,15 +41,15 @@ type Program struct {
 	// Used to find candidates to put in the runtimeMap map.
 	runtimeNameMap map[string][]*Type
 
-	// All live objects in the heap.
-	objects []Object
-
 	// memory usage by category
 	stats *Stats
 
 	buildVersion string
 
 	globals []*Root
+
+	// Information about objects, indexed by Object
+	types []typeInfo
 }
 
 // Process returns the core.Process used to construct this Program.
@@ -56,16 +59,6 @@ func (p *Program) Process() *core.Process {
 
 func (p *Program) Goroutines() []*Goroutine {
 	return p.goroutines
-}
-
-// ForEachObject calls fn with each object in the Go heap.
-// If fn returns false, ForEachObject returns immediately.
-func (p *Program) ForEachObject(fn func(o *Object) bool) {
-	for i := 0; i < len(p.objects); i++ {
-		if !fn(&p.objects[i]) {
-			return
-		}
-	}
 }
 
 // Stats returns a breakdown of the program's memory use by category.
@@ -270,10 +263,11 @@ func (f *Func) Entry() core.Address {
 	return f.entry
 }
 
-// An Object represents an object in the Go heap.
-type Object struct {
-	Addr core.Address
-	Size int64
+// An Object represents a single object in the Go heap.
+type Object core.Address
+
+// A typeInfo contains information about the type of an object.
+type typeInfo struct {
 	// This object has an effective type of [Repeat]Type.
 	// Parts of the object beyond the first Repeat*Type.Size bytes have unknown type.
 	// If Type == nil, the type is unknown. (TODO: provide access to ptr/nonptr bits in this case.)
@@ -306,5 +300,5 @@ type heapInfo struct {
 	base     core.Address // start of the span containing this heap region
 	size     int64        // size of objects in the span
 	mark     uint64       // 64 mark bits, one for every 8 bytes
-	firstIdx int          // the index of the first object that has any overlap with this region
+	firstIdx int          // the index of the first object that starts in this region
 }

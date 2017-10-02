@@ -25,51 +25,54 @@ func serveHtml(c *gocore.Program) {
 		}
 		a := core.Address(obj)
 		x, _ := c.FindObject(a)
-		if x == nil {
+		if x == 0 {
 			fmt.Fprintf(w, "can't find object at %x", a)
 			return
 		}
+		addr := c.Addr(x)
+		size := c.Size(x)
+		typ, repeat := c.Type(x)
 
 		tableStyle(w)
-		fmt.Fprintf(w, "<h1>object %x</h1>\n", x.Addr)
-		fmt.Fprintf(w, "<h3>%s</h3>\n", html.EscapeString(typeName(x)))
-		fmt.Fprintf(w, "<h3>%d bytes</h3>\n", x.Size)
+		fmt.Fprintf(w, "<h1>object %x</h1>\n", a)
+		fmt.Fprintf(w, "<h3>%s</h3>\n", html.EscapeString(typeName(c, x)))
+		fmt.Fprintf(w, "<h3>%d bytes</h3>\n", size)
 
-		if x.Type != nil && x.Repeat == 1 && x.Type.String() == "runtime.g" {
+		if typ != nil && repeat == 1 && typ.String() == "runtime.g" {
 			found := false
 			for _, g := range c.Goroutines() {
-				if g.Addr() == x.Addr {
+				if g.Addr() == addr {
 					found = true
 					break
 				}
 			}
 			if found {
-				fmt.Fprintf(w, "<h3><a href=\"goroutine?g=%x\">goroutine stack</a></h3>\n", x.Addr)
+				fmt.Fprintf(w, "<h3><a href=\"goroutine?g=%x\">goroutine stack</a></h3>\n", addr)
 			}
 		}
 
 		fmt.Fprintf(w, "<table>\n")
 		fmt.Fprintf(w, "<tr><th align=left>field</th><th align=left colspan=\"2\">type</th><th align=left>value</th></tr>\n")
 		var end int64
-		if x.Type != nil {
-			n := x.Size / x.Type.Size
+		if typ != nil {
+			n := size / typ.Size
 			if n > 1 {
 				for i := int64(0); i < n; i++ {
-					htmlObject(w, c, fmt.Sprintf("[%d]", i), x.Addr.Add(i*x.Type.Size), x.Type, nil)
+					htmlObject(w, c, fmt.Sprintf("[%d]", i), addr.Add(i*typ.Size), typ, nil)
 				}
 			} else {
-				htmlObject(w, c, "", x.Addr, x.Type, nil)
+				htmlObject(w, c, "", addr, typ, nil)
 			}
-			end = n * x.Type.Size
+			end = n * typ.Size
 		}
-		for i := end; i < x.Size; i += c.Process().PtrSize() {
+		for i := end; i < size; i += c.Process().PtrSize() {
 			fmt.Fprintf(w, "<tr><td>f%d</td><td>?</td><td><pre>", i)
 			for j := int64(0); j < c.Process().PtrSize(); j++ {
-				fmt.Fprintf(w, "%02x ", c.Process().ReadUint8(x.Addr.Add(i+j)))
+				fmt.Fprintf(w, "%02x ", c.Process().ReadUint8(addr.Add(i+j)))
 			}
 			fmt.Fprintf(w, "</pre></td><td><pre>")
 			for j := int64(0); j < c.Process().PtrSize(); j++ {
-				r := c.Process().ReadUint8(x.Addr.Add(i + j))
+				r := c.Process().ReadUint8(addr.Add(i + j))
 				if r >= 32 && r <= 126 {
 					fmt.Fprintf(w, "%s", html.EscapeString(string(rune(r))))
 				} else {
@@ -285,10 +288,10 @@ func htmlPointer(c *gocore.Program, a core.Address) string {
 		return "nil"
 	}
 	x, i := c.FindObject(a)
-	if x == nil {
+	if x == 0 {
 		return fmt.Sprintf("%x", a)
 	}
-	s := fmt.Sprintf("<a href=\"/object?o=%x\">object %x</a>", x.Addr, x.Addr)
+	s := fmt.Sprintf("<a href=\"/object?o=%x\">object %x</a>", c.Addr(x), c.Addr(x))
 	if i != 0 {
 		s = fmt.Sprintf("%s+%d", s, i)
 	}
