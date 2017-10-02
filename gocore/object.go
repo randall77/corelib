@@ -211,7 +211,7 @@ func (p *Program) Size(x Object) int64 {
 // FlagTypes must have been passed to Core when p was constructed.
 func (p *Program) Type(x Object) (*Type, int64) {
 	i, _ := p.findObjectIndex(core.Address(x))
-	return p.types[i].Type, p.types[i].Repeat
+	return p.types[i].t, p.types[i].r
 }
 
 // ForEachPtr calls fn for all heap pointers it finds in x.

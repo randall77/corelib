@@ -278,8 +278,8 @@ type typeInfo struct {
 	// This object has an effective type of [Repeat]Type.
 	// Parts of the object beyond the first Repeat*Type.Size bytes have unknown type.
 	// If Type == nil, the type is unknown. (TODO: provide access to ptr/nonptr bits in this case.)
-	Type   *Type
-	Repeat int64
+	t *Type
+	r int64
 }
 
 // A Stats struct is the node of a tree representing the entire memory
