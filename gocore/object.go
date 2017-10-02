@@ -70,8 +70,36 @@ func (p *Program) readObjects() {
 		}
 	}
 
-	// TODO: finalizers
-	// TODO: specials
+	// Finalizers
+	mheap := p.rtGlobals["mheap_"]
+	allspans := mheap.Field("allspans")
+	nSpan := allspans.SliceLen()
+	for i := int64(0); i < nSpan; i++ {
+		s := allspans.SliceIndex(i).Deref()
+		for sp := s.Field("specials"); sp.Address() != 0; sp = sp.Field("next") {
+			sp = sp.Deref() // *special to special
+			if sp.Field("kind").Uint8() != uint8(p.rtConstants["_KindSpecialFinalizer"]) {
+				// All other specials (just profile records) are not stored in the heap.
+				continue
+			}
+			// Note: the type runtime.specialfinalizer is the type here, but
+			// that type doesn't make it into the DWARF info. So we have to
+			// manually compute offsets.
+			// type specialfinalizer struct {
+			//      special special
+			//      fn      *funcval
+			//      nret    uintptr
+			//      fint    *_type
+			//      ot      *ptrtype
+			// }
+			a := sp.a.Add(p.findType("runtime.special").Size)
+			add(p.proc.ReadPtr(a.Add(0 * p.proc.PtrSize())))
+			add(p.proc.ReadPtr(a.Add(2 * p.proc.PtrSize())))
+			add(p.proc.ReadPtr(a.Add(3 * p.proc.PtrSize())))
+
+			// TODO: record these somewhere so ForEachPtr can return them.
+		}
+	}
 
 	// Expand root set to all reachable objects.
 	// TODO: run in parallel?
@@ -192,6 +220,8 @@ func (p *Program) Type(x Object) (*Type, int64) {
 //   the pointed-to object y
 //   the offset in y where the pointer points.
 // If fn returns false, ForEachPtr returns immediately.
+// For an edge from an object to its finalizer, the first argument
+// passed to fn will be -1.
 func (p *Program) ForEachPtr(x Object, fn func(int64, Object, int64) bool) {
 	size := p.Size(x)
 	for i := int64(0); i < size; i += p.proc.PtrSize() {

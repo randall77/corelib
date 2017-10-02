@@ -589,6 +589,7 @@ func (p *Program) readRuntimeConstants() {
 	m["kindGCProg"] = 1 << 6
 	m["kindDirectIface"] = 1 << 5
 	m["_PageSize"] = 1 << 13
+	m["_KindSpecialFinalizer"] = 1
 }
 
 const (
