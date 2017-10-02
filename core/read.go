@@ -150,7 +150,7 @@ func (p *Process) readLoad(f *os.File, e *elf.File, prog *elf.Prog) error {
 	if prog.Flags&elf.PF_W != 0 {
 		perm |= Write
 		if prog.Filesz != prog.Memsz {
-			return fmt.Errorf("writeable section not complete in core %x %x %x %x", prog.Filesz, prog.Memsz)
+			return fmt.Errorf("Data at address %x is not complete. The core has %x bytes, we need %x bytes", min, prog.Filesz, prog.Memsz)
 		}
 	}
 	if prog.Flags&elf.PF_X != 0 {
