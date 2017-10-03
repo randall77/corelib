@@ -66,20 +66,25 @@ func serveHtml(c *gocore.Program) {
 			end = n * typ.Size
 		}
 		for i := end; i < size; i += c.Process().PtrSize() {
-			fmt.Fprintf(w, "<tr><td>f%d</td><td colspan=\"2\">?</td><td><pre>", i)
-			for j := int64(0); j < c.Process().PtrSize(); j++ {
-				fmt.Fprintf(w, "%02x ", c.Process().ReadUint8(addr.Add(i+j)))
-			}
-			fmt.Fprintf(w, "</pre></td><td><pre>")
-			for j := int64(0); j < c.Process().PtrSize(); j++ {
-				r := c.Process().ReadUint8(addr.Add(i + j))
-				if r >= 32 && r <= 126 {
-					fmt.Fprintf(w, "%s", html.EscapeString(string(rune(r))))
-				} else {
-					fmt.Fprintf(w, ".")
+			fmt.Fprintf(w, "<tr><td>f%d</td><td colspan=\"2\">?</td>", i)
+			if c.IsPtr(addr.Add(i)) {
+				fmt.Fprintf(w, "<td>%s</td>", htmlPointer(c, c.Process().ReadPtr(addr.Add(i))))
+			} else {
+				fmt.Fprintf(w, "<td><pre>")
+				for j := int64(0); j < c.Process().PtrSize(); j++ {
+					fmt.Fprintf(w, "%02x ", c.Process().ReadUint8(addr.Add(i+j)))
 				}
+				fmt.Fprintf(w, "</pre></td><td><pre>")
+				for j := int64(0); j < c.Process().PtrSize(); j++ {
+					r := c.Process().ReadUint8(addr.Add(i + j))
+					if r >= 32 && r <= 126 {
+						fmt.Fprintf(w, "%s", html.EscapeString(string(rune(r))))
+					} else {
+						fmt.Fprintf(w, ".")
+					}
+				}
+				fmt.Fprintf(w, "</pre></td>")
 			}
-			fmt.Fprintf(w, "</pre></td>")
 			fmt.Fprintf(w, "</tr>\n")
 		}
 		fmt.Fprintf(w, "</table>\n")

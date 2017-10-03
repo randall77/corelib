@@ -149,6 +149,29 @@ func (p *Program) isPtr(a core.Address) bool {
 	return p.proc.ReadUint8(p.bitmapEnd.Add(-(off>>2)-1))>>uint(off&3)&1 != 0
 }
 
+// IsPtr reports whether the inferior at address a contains a pointer.
+func (p *Program) IsPtr(a core.Address) bool {
+	if a >= p.arenaStart && a < p.arenaUsed {
+		return p.isPtr(a)
+	}
+	for _, m := range p.modules {
+		for _, s := range [2]string{"data", "bss"} {
+			min := core.Address(m.r.Field(s).Uintptr())
+			max := core.Address(m.r.Field("e" + s).Uintptr())
+			if a < min || a >= max {
+				continue
+			}
+			gc := m.r.Field("gc" + s + "mask").Field("bytedata").Address()
+			i := a.Sub(min)
+			return p.proc.ReadUint8(gc.Add(i/8))>>uint(i%8) != 0
+		}
+	}
+	// Everywhere is isn't a pointer. At least, not a pointer into the Go heap.
+	// TODO: stacks?
+	// TODO: finalizers?
+	return false
+}
+
 // FindObject finds the object containing a.  Returns that object and the offset within
 // that object to which a points.
 // Returns 0,0 if a doesn't point to a live heap object.
