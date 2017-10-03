@@ -10,6 +10,7 @@ type Flags uint8
 
 const (
 	FlagTypes Flags = 1 << iota
+	FlagReverse
 )
 
 type Program struct {
@@ -57,6 +58,14 @@ type Program struct {
 	// Types of each object, indexed by object index.
 	// Only initialized if FlagTypes is passed to Core.
 	types []typeInfo
+
+	// Reverse edges. reverse[i] contains all the locations
+	// where a pointer to object #i resides.
+	// Only initialized if FlagReverse is passed to Core.
+	reverse [][]core.Address
+	// Sorted list of all roots.
+	// Only initialized if FlagReverse is passed to Core.
+	rootIdx []*Root
 }
 
 // Process returns the core.Process used to construct this Program.

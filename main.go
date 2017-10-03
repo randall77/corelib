@@ -82,7 +82,7 @@ func main() {
 	case "reachable":
 		flags = gocore.FlagTypes
 	case "html":
-		flags = gocore.FlagTypes
+		flags = gocore.FlagTypes | gocore.FlagReverse
 	}
 
 	// All commands other than "help" need a core file.

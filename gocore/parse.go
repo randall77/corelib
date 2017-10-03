@@ -62,6 +62,9 @@ func Core(proc *core.Process, flags Flags) (p *Program, err error) {
 	if flags&FlagTypes != 0 {
 		p.typeHeap()
 	}
+	if flags&FlagReverse != 0 {
+		p.reverseEdges()
+	}
 
 	return p, nil
 }

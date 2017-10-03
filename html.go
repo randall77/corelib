@@ -66,7 +66,7 @@ func serveHtml(c *gocore.Program) {
 			end = n * typ.Size
 		}
 		for i := end; i < size; i += c.Process().PtrSize() {
-			fmt.Fprintf(w, "<tr><td>f%d</td><td>?</td><td><pre>", i)
+			fmt.Fprintf(w, "<tr><td>f%d</td><td colspan=\"2\">?</td><td><pre>", i)
 			for j := int64(0); j < c.Process().PtrSize(); j++ {
 				fmt.Fprintf(w, "%02x ", c.Process().ReadUint8(addr.Add(i+j)))
 			}
@@ -83,6 +83,32 @@ func serveHtml(c *gocore.Program) {
 			fmt.Fprintf(w, "</tr>\n")
 		}
 		fmt.Fprintf(w, "</table>\n")
+		fmt.Fprintf(w, "<h3>references to this object</h3>\n")
+		nrev := 0
+		c.ForEachReversePtr(x, func(z gocore.Object, r *gocore.Root, i, j int64) bool {
+			if nrev == 10 {
+				fmt.Fprintf(w, "...additional references elided...<br/>\n")
+				return false
+			}
+			if r != nil {
+				fmt.Fprintf(w, "%s%s", r.Name, field(r.Type, i))
+			} else {
+				t, r := c.Type(z)
+				if t == nil {
+					fmt.Fprintf(w, "%s", htmlPointer(c, c.Addr(z).Add(i)))
+				} else {
+					idx := ""
+					if r > 1 {
+						idx = fmt.Sprintf("[%d]", i/t.Size)
+						i %= t.Size
+					}
+					fmt.Fprintf(w, "%s%s%s", htmlPointer(c, c.Addr(z)), idx, field(t, i))
+				}
+			}
+			fmt.Fprintf(w, " → %s<br/>\n", htmlPointer(c, a.Add(j)))
+			nrev++
+			return true
+		})
 	})
 	http.HandleFunc("/goroutines", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "<h1>goroutines</h1>\n")
@@ -279,7 +305,6 @@ func htmlObject(w http.ResponseWriter, c *gocore.Program, name string, a core.Ad
 		for _, f := range t.Fields {
 			htmlObject(w, c, name+"."+f.Name, a.Add(f.Off), f.Type, live)
 		}
-
 	}
 }
 
@@ -292,10 +317,19 @@ func htmlPointer(c *gocore.Program, a core.Address) string {
 		return fmt.Sprintf("%x", a)
 	}
 	s := fmt.Sprintf("<a href=\"/object?o=%x\">object %x</a>", c.Addr(x), c.Addr(x))
-	if i != 0 {
-		s = fmt.Sprintf("%s+%d", s, i)
+	if i == 0 {
+		return s
 	}
-	return s
+	t, r := c.Type(x)
+	if t == nil {
+		return fmt.Sprintf("%s+%d", s, i)
+	}
+	idx := ""
+	if r > 1 {
+		idx = fmt.Sprintf("[%d]", i/t.Size)
+		i %= t.Size
+	}
+	return fmt.Sprintf("%s%s%s", s, idx, region(t, i))
 }
 
 func htmlPointerAt(c *gocore.Program, a core.Address, live map[core.Address]bool) string {
@@ -318,4 +352,84 @@ func tableStyle(w http.ResponseWriter) {
 	fmt.Fprintf(w, "tr:hover {background-color: #f5f5f5}\n")
 	fmt.Fprintf(w, "</style>\n")
 
+}
+
+// Returns the name of the field at offset off in t.
+func field(t *gocore.Type, off int64) string {
+	switch t.Kind {
+	default:
+		return ""
+	case gocore.KindComplex:
+		if off == 0 {
+			return ".real"
+		}
+		return ".imag"
+	case gocore.KindEface:
+		if off == 0 {
+			return ".type"
+		}
+		return ".data"
+	case gocore.KindIface:
+		if off == 0 {
+			return ".itab"
+		}
+		return ".data"
+	case gocore.KindString:
+		if off == 0 {
+			return ".ptr"
+		}
+		return ".len"
+	case gocore.KindSlice:
+		if off == 0 {
+			return ".ptr"
+		}
+		if off < t.Size/2 {
+			return ".len"
+		}
+		return ".cap"
+	case gocore.KindArray:
+		i := off / t.Elem.Size
+		return fmt.Sprintf("[%d]%s", i, field(t.Elem, off-i*t.Elem.Size))
+	case gocore.KindStruct:
+		for _, f := range t.Fields {
+			if off >= f.Off && off < f.Off+f.Type.Size {
+				return fmt.Sprintf(".%s%s", f.Name, field(f.Type, off-f.Off))
+			}
+		}
+		return ".???"
+	}
+}
+
+// Returns the name of the region starting at offset off in t.
+func region(t *gocore.Type, off int64) string {
+	if off == 0 {
+		return ""
+	}
+	switch t.Kind {
+	default:
+		return ""
+	case gocore.KindComplex:
+		return ".imag"
+	case gocore.KindEface:
+		return ".data"
+	case gocore.KindIface:
+		return ".data"
+	case gocore.KindString:
+		return ".len"
+	case gocore.KindSlice:
+		if off < t.Size/2 {
+			return ".len"
+		}
+		return ".cap"
+	case gocore.KindArray:
+		i := off / t.Elem.Size
+		return fmt.Sprintf("[%d]%s", i, region(t.Elem, off-i*t.Elem.Size))
+	case gocore.KindStruct:
+		for _, f := range t.Fields {
+			if off >= f.Off && off < f.Off+f.Type.Size {
+				return fmt.Sprintf(".%s%s", f.Name, region(f.Type, off-f.Off))
+			}
+		}
+		return ".???"
+	}
 }
