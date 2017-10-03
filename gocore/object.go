@@ -196,6 +196,25 @@ func (p *Program) ForEachObject(fn func(x Object) bool) {
 	}
 }
 
+// ForEachRoot calls fn with each garbage collection root.
+// If fn returns false, ForEachRoot returns immediately.
+func (p *Program) ForEachRoot(fn func(r *Root) bool) {
+	for _, r := range p.globals {
+		if !fn(r) {
+			return
+		}
+	}
+	for _, g := range p.goroutines {
+		for _, f := range g.frames {
+			for _, r := range f.roots {
+				if !fn(r) {
+					return
+				}
+			}
+		}
+	}
+}
+
 // Addr returns the starting address of x.
 func (p *Program) Addr(x Object) core.Address {
 	return core.Address(x)

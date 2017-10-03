@@ -425,18 +425,16 @@ func (p *Program) typeHeap() {
 	}
 
 	// Get typings starting at roots.
-	for _, r := range p.globals {
-		p.typeObject(r.Addr, r.Type, p.proc, add)
-	}
 	fr := &frameReader{p: p}
-	for _, g := range p.goroutines {
-		for _, f := range g.frames {
-			fr.live = f.live
-			for _, r := range f.roots {
-				p.typeObject(r.Addr, r.Type, fr, add)
-			}
+	p.ForEachRoot(func(r *Root) bool {
+		if r.Live != nil {
+			fr.live = r.Live
+			p.typeObject(r.Addr, r.Type, fr, add)
+		} else {
+			p.typeObject(r.Addr, r.Type, p.proc, add)
 		}
-	}
+		return true
+	})
 
 	// Propagate typings through the heap.
 	for len(work) > 0 {
