@@ -9,7 +9,6 @@ import (
 
 // readObjects finds all the live objects in the heap and marks them
 // in the p.heapInfo mark fields.
-// It also fills in the p.sizes array.
 func (p *Program) readObjects() {
 	ptrSize := p.proc.PtrSize()
 
@@ -28,7 +27,7 @@ func (p *Program) readObjects() {
 		i := x.Sub(p.arenaStart) / 512
 		h := &p.heapInfo[i]
 		if h.base == 0 { // not in a valid span
-			// TODO: probably a runtime/compiler error?
+			// Can happen with intra-stack pointers.
 			return
 		}
 		// Round down to object start.

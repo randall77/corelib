@@ -319,7 +319,6 @@ func main() {
 			c.ForEachReversePtr(y, func(x gocore.Object, r *gocore.Root, i, j int64) bool {
 				if r != nil {
 					// found it.
-					// TODO: print stack trace if root is a frame
 					if r.Frame == nil {
 						// Print global
 						fmt.Printf("%s", r.Name)
