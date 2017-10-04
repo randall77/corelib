@@ -140,6 +140,53 @@ func (p *Program) readDWARFTypes() {
 		name := runtimeName(dt)
 		p.runtimeNameMap[name] = append(p.runtimeNameMap[name], t)
 	}
+
+	// Construct the runtime.specialfinalizer type.  It won't be found
+	// in DWARF before 1.10 because it does not appear in the type of any variable.
+	// type specialfinalizer struct {
+	//      special special
+	//      fn      *funcval
+	//      nret    uintptr
+	//      fint    *_type
+	//      ot      *ptrtype
+	// }
+	if p.runtimeNameMap["runtime.specialfinalizer"] == nil {
+		special := p.findType("runtime.special")
+		p.runtimeNameMap["runtime.specialfinalizer"] = []*Type{
+			&Type{
+				name: "runtime.specialfinalizer",
+				Size: special.Size + 4*p.proc.PtrSize(),
+				Kind: KindStruct,
+				Fields: []Field{
+					Field{
+						Name: "special",
+						Off:  0,
+						Type: special,
+					},
+					Field{
+						Name: "fn",
+						Off:  special.Size,
+						Type: p.findType("*runtime.funcval"),
+					},
+					Field{
+						Name: "nret",
+						Off:  special.Size + p.proc.PtrSize(),
+						Type: p.findType("uintptr"),
+					},
+					Field{
+						Name: "fint",
+						Off:  special.Size + 2*p.proc.PtrSize(),
+						Type: p.findType("*runtime._type"),
+					},
+					Field{
+						Name: "fn",
+						Off:  special.Size + 3*p.proc.PtrSize(),
+						Type: p.findType("*runtime.ptrtype"),
+					},
+				},
+			},
+		}
+	}
 }
 
 // dwarfSize is used to compute the size of a DWARF type when .Size()
@@ -790,7 +837,6 @@ func (p *Program) readStackVars() {
 			}
 		}
 	}
-	// TODO: finalizers, defers
 }
 
 /* Dwarf encoding notes

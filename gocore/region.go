@@ -83,8 +83,17 @@ func (r region) Int32() int32 {
 	return r.p.proc.ReadInt32(r.a)
 }
 
-// Uint64 returns the uint64 value stored in r.
-// r must have type uint64 or uintptr (on a 64-bit machine).
+// Uint16 returns the uint16 value stored in r.
+// r must have type uint16.
+func (r region) Uint16() uint16 {
+	if r.typ.Kind != KindUint || r.typ.Size != 2 {
+		panic("bad uint16 type " + r.typ.name)
+	}
+	return r.p.proc.ReadUint16(r.a)
+}
+
+// Uint8 returns the uint8 value stored in r.
+// r must have type uint8.
 func (r region) Uint8() uint8 {
 	if r.typ.Kind != KindUint || r.typ.Size != 1 {
 		panic("bad uint8 type " + r.typ.name)

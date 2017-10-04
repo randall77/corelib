@@ -2,6 +2,7 @@ package gocore
 
 import (
 	"math/bits"
+	"strings"
 
 	"github.com/randall77/corelib/core"
 )
@@ -46,10 +47,14 @@ func (p *Program) readObjects() {
 		q = append(q, Object(x))
 	}
 
+	// Start with scanning all the roots.
+	// Note that we don't just use the DWARF roots, just in case DWARF isn't complete.
+	// Instead we use exactly what the runtime uses.
+
 	// Goroutine roots
 	for _, g := range p.goroutines {
 		for _, f := range g.frames {
-			for a := range f.Live { // TODO: iteration order matter?
+			for a := range f.Live {
 				add(p.proc.ReadPtr(a))
 			}
 		}
@@ -71,38 +76,18 @@ func (p *Program) readObjects() {
 	}
 
 	// Finalizers
-	mheap := p.rtGlobals["mheap_"]
-	allspans := mheap.Field("allspans")
-	nSpan := allspans.SliceLen()
-	for i := int64(0); i < nSpan; i++ {
-		s := allspans.SliceIndex(i).Deref()
-		for sp := s.Field("specials"); sp.Address() != 0; sp = sp.Field("next") {
-			sp = sp.Deref() // *special to special
-			if sp.Field("kind").Uint8() != uint8(p.rtConstants["_KindSpecialFinalizer"]) {
-				// All other specials (just profile records) are not stored in the heap.
-				continue
+	for _, r := range p.globals {
+		if !strings.HasPrefix(r.Name, "finalizer for ") {
+			continue
+		}
+		for _, f := range r.Type.Fields {
+			if f.Type.Kind == KindPtr {
+				add(p.proc.ReadPtr(r.Addr.Add(f.Off)))
 			}
-			// Note: the type runtime.specialfinalizer is the type here, but
-			// that type doesn't make it into the DWARF info. So we have to
-			// manually compute offsets.
-			// type specialfinalizer struct {
-			//      special special
-			//      fn      *funcval
-			//      nret    uintptr
-			//      fint    *_type
-			//      ot      *ptrtype
-			// }
-			a := sp.a.Add(p.findType("runtime.special").Size)
-			add(p.proc.ReadPtr(a.Add(0 * p.proc.PtrSize())))
-			add(p.proc.ReadPtr(a.Add(2 * p.proc.PtrSize())))
-			add(p.proc.ReadPtr(a.Add(3 * p.proc.PtrSize())))
-
-			// TODO: record these somewhere so ForEachPtr can return them.
 		}
 	}
 
 	// Expand root set to all reachable objects.
-	// TODO: run in parallel?
 	for len(q) > 0 {
 		x := q[len(q)-1]
 		q = q[:len(q)-1]
@@ -333,25 +318,4 @@ func edges1(p *Program, r *Root, off int64, t *Type, fn func(int64, Object, int6
 		}
 	}
 	return true
-}
-
-// A revEdge is an incoming edge to an object.
-// Exactly one of fromObj or fromRoot will be non-nil.
-// fromIdx is the offset in fromObj/fromRoot where the pointer was found.
-// toIdx is the offset in the pointed-to object where the pointer lands.
-type revEdge struct {
-	fromObj  Object
-	fromRoot *Root
-	fromIdx  int64
-	toIdx    int64 // TODO: compute when needed?
-}
-
-// ForEachIncomingPtr calls fn for all incoming pointers into object x.
-// It calls fn with:
-//   the object or root containing the pointer (exactly one will be non-nil)
-//   the offset in the object/root where the pointer is found
-//   the offset of the target of the edge in x.
-// If fn returns false, ForEachIncomingPtr returns immediately.
-func (p *Program) ForEachIncomingPtr(x Object, fn func(Object, *Root, int64, int64) bool) {
-	//TODO
 }

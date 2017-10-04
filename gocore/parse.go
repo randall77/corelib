@@ -184,6 +184,27 @@ func (p *Program) readSpans() {
 				p.heapInfo[(a.Sub(p.arenaStart))/512] = heapInfo{base: min, size: elemSize, firstIdx: -1}
 			}
 
+			// Process special records.
+			for sp := s.Field("specials"); sp.Address() != 0; sp = sp.Field("next") {
+				sp = sp.Deref() // *special to special
+				if sp.Field("kind").Uint8() != uint8(p.rtConstants["_KindSpecialFinalizer"]) {
+					// All other specials (just profile records) can't point into the heap.
+					continue
+				}
+				obj := min.Add(int64(sp.Field("offset").Uint16()))
+				p.globals = append(p.globals,
+					&Root{
+						Name:  fmt.Sprintf("finalizer for %x", obj),
+						Addr:  sp.a,
+						Type:  p.findType("runtime.specialfinalizer"),
+						Frame: nil,
+					})
+				// TODO: these aren't really "globals", as they
+				// are kept alive by the object they reference being alive.
+				// But we have no way of adding edges from an object to
+				// the corresponding finalizer data, so we punt on that thorny
+				// issue for now.
+			}
 		case spanFree:
 			freeSpanSize += spanSize
 		case spanDead:
