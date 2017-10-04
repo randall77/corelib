@@ -49,7 +49,7 @@ func (p *Program) readObjects() {
 	// Goroutine roots
 	for _, g := range p.goroutines {
 		for _, f := range g.frames {
-			for a := range f.live { // TODO: iteration order matter?
+			for a := range f.Live { // TODO: iteration order matter?
 				add(p.proc.ReadPtr(a))
 			}
 		}
@@ -297,7 +297,7 @@ func edges1(p *Program, r *Root, off int64, t *Type, fn func(int64, Object, int6
 		// Itabs are never in the heap.
 		// Types might be, though.
 		a := r.Addr.Add(off)
-		if r.Live == nil || r.Live[a] {
+		if r.Frame == nil || r.Frame.Live[a] {
 			dst, off2 := p.FindObject(p.proc.ReadPtr(a))
 			if dst != 0 {
 				if !fn(off, dst, off2) {
@@ -310,7 +310,7 @@ func edges1(p *Program, r *Root, off int64, t *Type, fn func(int64, Object, int6
 		fallthrough
 	case KindPtr, KindString, KindSlice, KindFunc:
 		a := r.Addr.Add(off)
-		if r.Live == nil || r.Live[a] {
+		if r.Frame == nil || r.Frame.Live[a] {
 			dst, off2 := p.FindObject(p.proc.ReadPtr(a))
 			if dst != 0 {
 				if !fn(off, dst, off2) {

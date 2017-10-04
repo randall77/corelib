@@ -131,6 +131,7 @@ func (g *Goroutine) Frames() []*Frame {
 }
 
 type Frame struct {
+	parent   *Frame
 	f        *Func        // function whose activation record this frame is
 	pc       core.Address // resumption point
 	min, max core.Address // extent of stack frame
@@ -138,7 +139,7 @@ type Frame struct {
 	// Set of locations that contain a live pointer. Note that this set
 	// may contain locations outside the frame (in particular, the args
 	// for the frame).
-	live map[core.Address]bool
+	Live map[core.Address]bool
 
 	roots []*Root
 
@@ -170,13 +171,19 @@ func (f *Frame) Roots() []*Root {
 	return f.roots
 }
 
+// Parent returns the parent frame of f, or nil if it is the top of the stack.
+func (f *Frame) Parent() *Frame {
+	return f.parent
+}
+
 // A Root is an area of memory that might have pointers into the heap.
 type Root struct {
 	Name string
 	Addr core.Address
 	Type *Type
-	// Live, if non-nil, contains the set of words in the root that are live.
-	Live map[core.Address]bool
+	// Frame, if non-nil, points to the frame in which this root lives.
+	// Roots with non-nil Frame fields should use Frame.Live to filter the live pointers in this Root.
+	Frame *Frame
 }
 
 // A Type is the representation of the type of a Go object.

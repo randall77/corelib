@@ -427,8 +427,8 @@ func (p *Program) typeHeap() {
 	// Get typings starting at roots.
 	fr := &frameReader{p: p}
 	p.ForEachRoot(func(r *Root) bool {
-		if r.Live != nil {
-			fr.live = r.Live
+		if r.Frame != nil {
+			fr.live = r.Frame.Live
 			p.typeObject(r.Addr, r.Type, fr, add)
 		} else {
 			p.typeObject(r.Addr, r.Type, p.proc, add)
@@ -671,10 +671,10 @@ func (p *Program) readGlobals() {
 			continue // Ignore markers like data/edata.
 		}
 		p.globals = append(p.globals, &Root{
-			Name: e.AttrField(dwarf.AttrName).Val.(string),
-			Addr: a,
-			Type: p.dwarfMap[dt],
-			Live: nil,
+			Name:  e.AttrField(dwarf.AttrName).Val.(string),
+			Addr:  a,
+			Type:  p.dwarfMap[dt],
+			Frame: nil,
 		})
 	}
 }
@@ -755,16 +755,16 @@ func (p *Program) readStackVars() {
 		for _, f := range g.frames {
 			// Start with all pointer slots as unnamed.
 			unnamed := map[core.Address]bool{}
-			for a := range f.live {
+			for a := range f.Live {
 				unnamed[a] = true
 			}
 			// Emit roots for DWARF entries.
 			for _, v := range vars[f.f] {
 				r := &Root{
-					Name: v.name,
-					Addr: f.max.Add(v.off),
-					Type: v.typ,
-					Live: f.live,
+					Name:  v.name,
+					Addr:  f.max.Add(v.off),
+					Type:  v.typ,
+					Frame: f,
 				}
 				f.roots = append(f.roots, r)
 				// Remove this variable from the set of unnamed pointers.
@@ -781,10 +781,10 @@ func (p *Program) readStackVars() {
 			sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
 			for _, a := range s {
 				r := &Root{
-					Name: "unk",
-					Addr: a,
-					Type: p.findType("unsafe.Pointer"),
-					Live: f.live,
+					Name:  "unk",
+					Addr:  a,
+					Type:  p.findType("unsafe.Pointer"),
+					Frame: f,
 				}
 				f.roots = append(f.roots, r)
 			}

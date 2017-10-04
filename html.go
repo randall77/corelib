@@ -160,7 +160,7 @@ func serveHtml(c *gocore.Program) {
 			fmt.Fprintf(w, "<table>\n")
 			fmt.Fprintf(w, "<tr><th align=left>field</th><th align=left colspan=\"2\">type</th><th align=left>value</th></tr>\n")
 			for _, r := range f.Roots() {
-				htmlObject(w, c, r.Name, r.Addr, r.Type, r.Live)
+				htmlObject(w, c, r.Name, r.Addr, r.Type, f.Live)
 			}
 			fmt.Fprintf(w, "</table>\n")
 		}
@@ -171,7 +171,7 @@ func serveHtml(c *gocore.Program) {
 		fmt.Fprintf(w, "<table>\n")
 		fmt.Fprintf(w, "<tr><th align=left>field</th><th align=left colspan=\"2\">type</th><th align=left>value</th></tr>\n")
 		for _, r := range c.Globals() {
-			htmlObject(w, c, r.Name, r.Addr, r.Type, r.Live)
+			htmlObject(w, c, r.Name, r.Addr, r.Type, nil)
 		}
 		fmt.Fprintf(w, "</table>\n")
 	})
@@ -405,6 +405,20 @@ func field(t *gocore.Type, off int64) string {
 	}
 }
 
+// Returns the name of the field at offset off in x.
+func objField(c *gocore.Program, x gocore.Object, off int64) string {
+	t, r := c.Type(x)
+	if t == nil {
+		return fmt.Sprintf("f%d", off)
+	}
+	s := ""
+	if r > 1 {
+		s = fmt.Sprintf("[%d]", off/t.Size)
+		off %= t.Size
+	}
+	return s + field(t, off)
+}
+
 // Returns the name of the region starting at offset off in t.
 func region(t *gocore.Type, off int64) string {
 	if off == 0 {
@@ -437,4 +451,20 @@ func region(t *gocore.Type, off int64) string {
 		}
 		return ".???"
 	}
+}
+
+func objRegion(c *gocore.Program, x gocore.Object, off int64) string {
+	t, r := c.Type(x)
+	if t == nil {
+		return fmt.Sprintf("f%d", off)
+	}
+	if off == 0 {
+		return ""
+	}
+	s := ""
+	if r > 1 {
+		s = fmt.Sprintf("[%d]", off/t.Size)
+		off %= t.Size
+	}
+	return s + region(t, off)
 }

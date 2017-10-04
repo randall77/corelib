@@ -549,6 +549,9 @@ func (p *Program) readG(r region) *Goroutine {
 		if f.f.name == "runtime.goexit" {
 			break
 		}
+		if len(g.frames) > 0 {
+			g.frames[len(g.frames)-1].parent = f
+		}
 		g.frames = append(g.frames, f)
 
 		if f.f.name == "runtime.sigtrampgo" {
@@ -631,7 +634,7 @@ func (p *Program) readFrame(sp, pc core.Address) *Frame {
 			}
 		}
 	}
-	frame.live = live
+	frame.Live = live
 
 	return frame
 }

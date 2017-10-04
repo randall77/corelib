@@ -80,7 +80,7 @@ func main() {
 	case "objects":
 		flags = gocore.FlagTypes
 	case "reachable":
-		flags = gocore.FlagTypes
+		flags = gocore.FlagTypes | gocore.FlagReverse
 	case "html":
 		flags = gocore.FlagTypes | gocore.FlagReverse
 	}
@@ -300,106 +300,74 @@ func main() {
 			os.Exit(1)
 		}
 
-		// Find the set of objects that can reach the query object.
-		// Map value is the minimum distance to query object + 1.
-		m := map[gocore.Object]int64{}
-		m[obj] = 1
-
-		for {
-			changed := false
-			c.ForEachObject(func(x gocore.Object) bool {
-				c.ForEachPtr(x, func(_ int64, y gocore.Object, _ int64) bool {
-					if m[y] != 0 && (m[x] == 0 || m[x] > m[y]+1) {
-						m[x] = m[y] + 1
-						changed = true
-					}
-					return true
-				})
-				return true
-			})
-			if !changed {
-				break
+		// Breadth-first search backwards until we reach a root.
+		type hop struct {
+			i int64         // offset in "from" object (the key in the path map) where the pointer is
+			x gocore.Object // the "to" object
+			j int64         // the offset in the "to" object
+		}
+		depth := map[gocore.Object]int{}
+		depth[obj] = 0
+		q := []gocore.Object{obj}
+		done := false
+		for !done {
+			if len(q) == 0 {
+				panic("can't find a root that can reach the object")
 			}
-		}
-
-		// Find a minimum distance root.
-		var mind int64
-		var minr *gocore.Root
-		var minf *gocore.Frame
-		var ming *gocore.Goroutine
-		for _, r := range c.Globals() {
-			c.ForEachRootPtr(r, func(_ int64, y gocore.Object, _ int64) bool {
-				if m[y] != 0 && (mind == 0 || m[y] < mind) {
-					mind = m[y]
-					minr = r
-					minf = nil
-					ming = nil
-				}
-				return true
-			})
-		}
-		for _, g := range c.Goroutines() {
-			for _, f := range g.Frames() {
-				for _, r := range f.Roots() {
-					c.ForEachRootPtr(r, func(_ int64, y gocore.Object, _ int64) bool {
-						if m[y] != 0 && (mind == 0 || m[y] < mind) {
-							mind = m[y]
-							minr = r
-							minf = f
-							ming = g
+			y := q[0]
+			q = q[1:]
+			c.ForEachReversePtr(y, func(x gocore.Object, r *gocore.Root, i, j int64) bool {
+				if r != nil {
+					// found it.
+					// TODO: print stack trace if root is a frame
+					if r.Frame == nil {
+						// Print global
+						fmt.Printf("%s", r.Name)
+					} else {
+						// Print stack up to frame in question.
+						var frames []*gocore.Frame
+						for f := r.Frame.Parent(); f != nil; f = f.Parent() {
+							frames = append(frames, f)
 						}
-						return true
-					})
-				}
-			}
-		}
-		if mind == 0 {
-			panic("can't find root holding object live")
-		}
+						for k := len(frames) - 1; k >= 0; k-- {
+							fmt.Printf("%s\n", frames[k].Func().Name())
+						}
+						// Print frame + variable in frame.
+						fmt.Printf("%s.%s", r.Frame.Func().Name(), r.Name)
+					}
+					fmt.Printf("%s → \n", field(r.Type, i))
 
-		// Print minimum distance path to object.
-		if minf != nil {
-			fs := ming.Frames()
-			for i := len(fs) - 1; i >= 0; i-- {
-				f := fs[i]
-				if f != minf {
-					fmt.Printf("%s\n", f.Func().Name())
-				} else {
-					fmt.Printf("%s ", f.Func().Name())
-					break
+					z := y
+					for {
+						fmt.Printf("%x %s", c.Addr(z), typeName(c, z))
+						if z == obj {
+							fmt.Println()
+							break
+						}
+						// Find an edge out of z which goes to an object
+						// closer to obj.
+						c.ForEachPtr(z, func(i int64, w gocore.Object, j int64) bool {
+							if d, ok := depth[w]; ok && d < depth[z] {
+								fmt.Printf(" %s → %s", objField(c, z, i), objRegion(c, w, j))
+								z = w
+								return false
+							}
+							return true
+						})
+						fmt.Println()
+					}
+					done = true
+					return false
 				}
-			}
-		}
-		var x gocore.Object
-		c.ForEachRootPtr(minr, func(i int64, y gocore.Object, j int64) bool {
-			if m[y] != mind {
-				return true
-			}
-			fmt.Printf("%s %s %s ->", minr.Name, minr.Type, typeFieldName(minr.Type, i))
-			if j != 0 {
-				fmt.Printf(" +%d", j)
-			}
-			fmt.Println()
-			x = y
-			return false
-		})
-		for d := mind - 1; d != 0; d-- {
-			fmt.Printf("%x %s", c.Addr(x), typeName(c, x))
-			c.ForEachPtr(x, func(i int64, y gocore.Object, j int64) bool {
-				if m[y] != d {
+				if _, ok := depth[x]; ok {
+					// we already found a shorter path to this object.
 					return true
 				}
-				fmt.Printf(" %s ->", fieldName(c, x, i))
-				if j != 0 {
-					fmt.Printf(" +%d", j)
-				}
-				fmt.Println()
-				x = y
-				return false
+				depth[x] = depth[y] + 1
+				q = append(q, x)
+				return true
 			})
 		}
-		fmt.Printf("%x %s\n", c.Addr(x), typeName(c, x))
-
 	case "html":
 		serveHtml(c)
 	}
