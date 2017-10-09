@@ -655,10 +655,9 @@ func (p *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 // readRuntimeConstants populates the p.rtConstants map.
 func (p *Program) readRuntimeConstants() {
 	p.rtConstants = map[string]int64{}
-	// TODO: It would be ideal if we could glean this info from DWARF.
-	// But we don't package up constants in DWARF right now. See issue #14517.
-	// For now, we'll hard code them. As we get more Go versions, each entry
-	// might need to condition on Go version, and maybe arch.
+
+	// Hardcoded values for Go 1.8 & 1.9.
+	// (Go did not have constants in DWARF before 1.10.)
 	m := p.rtConstants
 	m["_MSpanDead"] = 0
 	m["_MSpanInUse"] = 1
@@ -679,6 +678,25 @@ func (p *Program) readRuntimeConstants() {
 	m["kindDirectIface"] = 1 << 5
 	m["_PageSize"] = 1 << 13
 	m["_KindSpecialFinalizer"] = 1
+
+	// From 1.10, these constants are recorded in DWARF records.
+	d, _ := p.proc.DWARF()
+	r := d.Reader()
+	for e, err := r.Next(); e != nil && err == nil; e, err = r.Next() {
+		if e.Tag != dwarf.TagConstant {
+			continue
+		}
+		name := e.AttrField(dwarf.AttrName).Val.(string)
+		if !strings.HasPrefix(name, "runtime.") {
+			continue
+		}
+		name = name[8:]
+		c := e.AttrField(dwarf.AttrConstValue)
+		if c == nil {
+			continue
+		}
+		p.rtConstants[name] = c.Val.(int64)
+	}
 }
 
 const (
