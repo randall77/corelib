@@ -77,7 +77,28 @@ func (p *Process) Mappings() []*Mapping {
 	return p.maps
 }
 
-// Writeable reports whether the address is writeable (by the inferior at the time of the core dump).
+// Readable reports whether the address a is readable.
+func (p *Process) Readable(a Address) bool {
+	return p.findMapping(a) != nil
+}
+
+// ReadableN reports whether the n bytes starting at address a are readable.
+func (p *Process) ReadableN(a Address, n int64) bool {
+	for {
+		m := p.findMapping(a)
+		if m == nil || m.perm&Read == 0 {
+			return false
+		}
+		c := m.max.Sub(a)
+		if n <= c {
+			return true
+		}
+		n -= c
+		a = a.Add(c)
+	}
+}
+
+// Writeable reports whether the address a was writeable (by the inferior at the time of the core dump).
 func (p *Process) Writeable(a Address) bool {
 	m := p.findMapping(a)
 	if m == nil {
