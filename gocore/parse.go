@@ -462,6 +462,8 @@ func (m *module) readFunc(r region, pcln region) *Func {
 	// Read pcln tables we need.
 	if stackmap := int(r.p.rtConstants["_PCDATA_StackMapIndex"]); stackmap < len(f.pcdata) {
 		f.stackMap.read(r.p.proc, pcln.SliceIndex(int64(f.pcdata[stackmap])).a)
+	} else {
+		f.stackMap.setEmpty()
 	}
 
 	return f

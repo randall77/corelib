@@ -48,6 +48,10 @@ func (p *pcTab) read(core *core.Process, data core.Address) {
 	}
 }
 
+func (p *pcTab) setEmpty() {
+	p.entries = []pcTabEntry{{bytes: 1<<63 - 1, val: -1}}
+}
+
 func (t *pcTab) find(off int64) int64 {
 	for _, e := range t.entries {
 		if off < e.bytes {
