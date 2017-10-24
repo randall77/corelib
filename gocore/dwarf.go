@@ -10,7 +10,7 @@ import (
 )
 
 // read DWARF types from core dump.
-func (p *Program) readDWARFTypes() {
+func (p *Process) readDWARFTypes() {
 	d, _ := p.proc.DWARF()
 
 	// Make one of our own Types for each dwarf type.
@@ -350,7 +350,7 @@ func (c typeChunk) String() string {
 }
 
 // typeHeap tries to label all the heap objects with types.
-func (p *Program) typeHeap() {
+func (p *Process) typeHeap() {
 	// Type info for the start of each object. a.k.a. "0 offset" typings.
 	p.types = make([]typeInfo, p.nObj)
 
@@ -524,7 +524,7 @@ type reader interface {
 }
 
 type frameReader struct {
-	p    *Program
+	p    *Process
 	live map[core.Address]bool
 }
 
@@ -541,7 +541,7 @@ func (fr *frameReader) ReadInt(a core.Address) int64 {
 // typeObject takes an address and a type for the data at that address.
 // For each pointer it finds in the memory at that address, it calls add with the pointer
 // and the type + repeat count of the thing that it points to.
-func (p *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Address, *Type, int64)) {
+func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Address, *Type, int64)) {
 	ptrSize := p.proc.PtrSize()
 
 	switch t.Kind {
@@ -653,7 +653,7 @@ func (p *Program) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 }
 
 // readRuntimeConstants populates the p.rtConstants map.
-func (p *Program) readRuntimeConstants() {
+func (p *Process) readRuntimeConstants() {
 	p.rtConstants = map[string]int64{}
 
 	// Hardcoded values for Go 1.8 & 1.9.
@@ -706,7 +706,7 @@ const (
 	_DW_OP_consts         = 0x11
 )
 
-func (p *Program) readGlobals() {
+func (p *Process) readGlobals() {
 	d, _ := p.proc.DWARF()
 	r := d.Reader()
 	for e, err := r.Next(); e != nil && err == nil; e, err = r.Next() {
@@ -744,7 +744,7 @@ func (p *Program) readGlobals() {
 	}
 }
 
-func (p *Program) readStackVars() {
+func (p *Process) readStackVars() {
 	type Var struct {
 		name string
 		off  int64

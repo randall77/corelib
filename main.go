@@ -373,7 +373,7 @@ func main() {
 }
 
 // typeName returns a string representing the type of this object.
-func typeName(c *gocore.Program, x gocore.Object) string {
+func typeName(c *gocore.Process, x gocore.Object) string {
 	size := c.Size(x)
 	typ, repeat := c.Type(x)
 	if typ == nil {
@@ -392,7 +392,7 @@ func typeName(c *gocore.Program, x gocore.Object) string {
 }
 
 // fieldName returns the name of the field at offset off in x.
-func fieldName(c *gocore.Program, x gocore.Object, off int64) string {
+func fieldName(c *gocore.Process, x gocore.Object, off int64) string {
 	size := c.Size(x)
 	typ, repeat := c.Type(x)
 	if typ == nil {

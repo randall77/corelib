@@ -6,7 +6,7 @@ import (
 	"github.com/randall77/corelib/core"
 )
 
-func (p *Program) reverseEdges() {
+func (p *Process) reverseEdges() {
 	p.reverse = make([][]core.Address, p.nObj)
 	p.ForEachObject(func(x Object) bool {
 		p.ForEachPtr(x, func(i int64, y Object, _ int64) bool {
@@ -40,7 +40,7 @@ func (p *Program) reverseEdges() {
 //   the offset j in y where the pointer points.
 // If fn returns false, ForEachReversePtr returns immediately.
 // FlagReverse must have been passed to Core when p was constructed.
-func (p *Program) ForEachReversePtr(y Object, fn func(x Object, r *Root, i, j int64) bool) {
+func (p *Process) ForEachReversePtr(y Object, fn func(x Object, r *Root, i, j int64) bool) {
 	idx, _ := p.findObjectIndex(p.Addr(y))
 	for _, a := range p.reverse[idx] {
 		// Read pointer, compute offset in y.

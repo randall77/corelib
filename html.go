@@ -11,7 +11,7 @@ import (
 	"github.com/randall77/corelib/gocore"
 )
 
-func serveHtml(c *gocore.Program) {
+func serveHtml(c *gocore.Process) {
 	http.HandleFunc("/object", func(w http.ResponseWriter, r *http.Request) {
 		objs, ok := r.URL.Query()["o"]
 		if !ok || len(objs) != 1 {
@@ -199,7 +199,7 @@ func serveHtml(c *gocore.Program) {
 	http.ListenAndServe(":8080", nil)
 }
 
-func htmlObject(w http.ResponseWriter, c *gocore.Program, name string, a core.Address, t *gocore.Type, live map[core.Address]bool) {
+func htmlObject(w http.ResponseWriter, c *gocore.Process, name string, a core.Address, t *gocore.Type, live map[core.Address]bool) {
 	switch t.Kind {
 	case gocore.KindBool:
 		v := c.Process().ReadUint8(a) != 0
@@ -313,7 +313,7 @@ func htmlObject(w http.ResponseWriter, c *gocore.Program, name string, a core.Ad
 	}
 }
 
-func htmlPointer(c *gocore.Program, a core.Address) string {
+func htmlPointer(c *gocore.Process, a core.Address) string {
 	if a == 0 {
 		return "nil"
 	}
@@ -337,7 +337,7 @@ func htmlPointer(c *gocore.Program, a core.Address) string {
 	return fmt.Sprintf("%s%s%s", s, idx, region(t, i))
 }
 
-func htmlPointerAt(c *gocore.Program, a core.Address, live map[core.Address]bool) string {
+func htmlPointerAt(c *gocore.Process, a core.Address, live map[core.Address]bool) string {
 	if live != nil && !live[a] {
 		return "<text style=\"color:LightGray\">dead</text>"
 	}
@@ -406,7 +406,7 @@ func field(t *gocore.Type, off int64) string {
 }
 
 // Returns the name of the field at offset off in x.
-func objField(c *gocore.Program, x gocore.Object, off int64) string {
+func objField(c *gocore.Process, x gocore.Object, off int64) string {
 	t, r := c.Type(x)
 	if t == nil {
 		return fmt.Sprintf("f%d", off)
@@ -453,7 +453,7 @@ func region(t *gocore.Type, off int64) string {
 	}
 }
 
-func objRegion(c *gocore.Program, x gocore.Object, off int64) string {
+func objRegion(c *gocore.Process, x gocore.Object, off int64) string {
 	t, r := c.Type(x)
 	if t == nil {
 		return fmt.Sprintf("f%d", off)

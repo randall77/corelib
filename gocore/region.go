@@ -7,7 +7,7 @@ import "github.com/randall77/corelib/core"
 // Note that it is the type of the thing in the region,
 // not the type of the reference to the region.
 type region struct {
-	p   *Program // TODO: can we remove?
+	p   *Process // TODO: can we remove?
 	a   core.Address
 	typ *Type
 }

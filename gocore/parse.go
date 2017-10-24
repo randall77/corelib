@@ -10,7 +10,7 @@ import (
 
 // Core takes a loaded core file and extracts Go information from it.
 // flags is a bitmask of data that should be extracted from the core.
-func Core(proc *core.Process, flags Flags) (p *Program, err error) {
+func Core(proc *core.Process, flags Flags) (p *Process, err error) {
 	// Make sure we have DWARF info.
 	if _, err := proc.DWARF(); err != nil {
 		return nil, err
@@ -32,7 +32,7 @@ func Core(proc *core.Process, flags Flags) (p *Program, err error) {
 		}()
 	*/
 
-	p = &Program{
+	p = &Process{
 		proc:       proc,
 		runtimeMap: map[core.Address]*Type{},
 		dwarfMap:   map[dwarf.Type]*Type{},
@@ -69,7 +69,7 @@ func Core(proc *core.Process, flags Flags) (p *Program, err error) {
 	return p, nil
 }
 
-func (p *Program) readSpans() {
+func (p *Process) readSpans() {
 	mheap := p.rtGlobals["mheap_"]
 
 	spanTableStart := mheap.Field("spans").SlicePtr().Address()
@@ -256,7 +256,7 @@ func (p *Program) readSpans() {
 	check(p.stats)
 }
 
-func (p *Program) readModules() {
+func (p *Process) readModules() {
 	ms := p.rtGlobals["modulesSlice"].Cast("*[]*runtime.moduledata").Deref()
 	n := ms.SliceLen()
 	for i := int64(0); i < n; i++ {
@@ -265,7 +265,7 @@ func (p *Program) readModules() {
 	}
 }
 
-func (p *Program) readModule(r region) *module {
+func (p *Process) readModule(r region) *module {
 	m := &module{r: r}
 	m.types = core.Address(r.Field("types").Uintptr())
 	m.etypes = core.Address(r.Field("etypes").Uintptr())
@@ -332,7 +332,7 @@ func (t *Type) ptrs1(s []int64, off int64) []int64 {
 
 // Convert the address of a runtime._type to a *Type.
 // Guaranteed to return a non-nil *Type.
-func (p *Program) runtimeType2Type(a core.Address) *Type {
+func (p *Process) runtimeType2Type(a core.Address) *Type {
 	if t := p.runtimeMap[a]; t != nil {
 		return t
 	}
@@ -496,7 +496,7 @@ func funcdata(r region, n int64) core.Address {
 	return r.p.proc.ReadPtr(a)
 }
 
-func (p *Program) readMs() {
+func (p *Process) readMs() {
 	mp := p.rtGlobals["allm"]
 	for mp.Address() != 0 {
 		m := mp.Deref()
@@ -510,7 +510,7 @@ func (p *Program) readMs() {
 	}
 }
 
-func (p *Program) readGs() {
+func (p *Process) readGs() {
 	// TODO: figure out how to "flush" running Gs.
 	allgs := p.rtGlobals["allgs"]
 	n := allgs.SliceLen()
@@ -524,7 +524,7 @@ func (p *Program) readGs() {
 	}
 }
 
-func (p *Program) readG(r region) *Goroutine {
+func (p *Process) readG(r region) *Goroutine {
 	g := &Goroutine{r: r}
 	stk := r.Field("stack")
 	g.stackSize = int64(stk.Field("hi").Uintptr() - stk.Field("lo").Uintptr())
@@ -605,7 +605,7 @@ func (p *Program) readG(r region) *Goroutine {
 	return g
 }
 
-func (p *Program) readFrame(sp, pc core.Address) *Frame {
+func (p *Process) readFrame(sp, pc core.Address) *Frame {
 	f := p.funcTab.find(pc)
 	if f == nil {
 		panic(fmt.Errorf("  pc not found %x\n", pc))

@@ -13,7 +13,7 @@ const (
 	FlagReverse
 )
 
-type Program struct {
+type Process struct {
 	proc *core.Process
 
 	arenaStart core.Address
@@ -68,35 +68,35 @@ type Program struct {
 	rootIdx []*Root
 }
 
-// Process returns the core.Process used to construct this Program.
-func (p *Program) Process() *core.Process {
+// Process returns the core.Process used to construct this Process.
+func (p *Process) Process() *core.Process {
 	return p.proc
 }
 
-func (p *Program) Goroutines() []*Goroutine {
+func (p *Process) Goroutines() []*Goroutine {
 	return p.goroutines
 }
 
 // Stats returns a breakdown of the program's memory use by category.
-func (p *Program) Stats() *Stats {
+func (p *Process) Stats() *Stats {
 	return p.stats
 }
 
 // BuildVersion returns the Go version that was used to build the inferior binary.
-func (p *Program) BuildVersion() string {
+func (p *Process) BuildVersion() string {
 	return p.buildVersion
 }
 
-func (p *Program) Globals() []*Root {
+func (p *Process) Globals() []*Root {
 	return p.globals
 }
 
 // FindFunc returns the function which contains the code at address pc, if any.
-func (p *Program) FindFunc(pc core.Address) *Func {
+func (p *Process) FindFunc(pc core.Address) *Func {
 	return p.funcTab.find(pc)
 }
 
-func (p *Program) findType(name string) *Type {
+func (p *Process) findType(name string) *Type {
 	s := p.runtimeNameMap[name]
 	if len(s) == 0 {
 		panic("can't find type " + name)

@@ -9,7 +9,7 @@ import (
 
 // readObjects finds all the live objects in the heap and marks them
 // in the p.heapInfo mark fields.
-func (p *Program) readObjects() {
+func (p *Process) readObjects() {
 	ptrSize := p.proc.PtrSize()
 
 	// number of live objects found so far
@@ -123,7 +123,7 @@ func (p *Program) readObjects() {
 
 // isPtr reports whether the inferior at address a contains a pointer.
 // a must be somewhere in the heap.
-func (p *Program) isPtr(a core.Address) bool {
+func (p *Process) isPtr(a core.Address) bool {
 	// Convert arena offset in words to bitmap offset in bits.
 	off := a.Sub(p.arenaStart)
 	off >>= p.proc.LogPtrSize()
@@ -134,7 +134,7 @@ func (p *Program) isPtr(a core.Address) bool {
 }
 
 // IsPtr reports whether the inferior at address a contains a pointer.
-func (p *Program) IsPtr(a core.Address) bool {
+func (p *Process) IsPtr(a core.Address) bool {
 	if a >= p.arenaStart && a < p.arenaUsed {
 		return p.isPtr(a)
 	}
@@ -159,7 +159,7 @@ func (p *Program) IsPtr(a core.Address) bool {
 // FindObject finds the object containing a.  Returns that object and the offset within
 // that object to which a points.
 // Returns 0,0 if a doesn't point to a live heap object.
-func (p *Program) FindObject(a core.Address) (Object, int64) {
+func (p *Process) FindObject(a core.Address) (Object, int64) {
 	if a < p.arenaStart || a >= p.arenaUsed {
 		// Not in Go heap.
 		return 0, 0
@@ -179,7 +179,7 @@ func (p *Program) FindObject(a core.Address) (Object, int64) {
 	return Object(x), a.Sub(x)
 }
 
-func (p *Program) findObjectIndex(a core.Address) (int, int64) {
+func (p *Process) findObjectIndex(a core.Address) (int, int64) {
 	x, off := p.FindObject(a)
 	if x == 0 {
 		return -1, 0
@@ -190,7 +190,7 @@ func (p *Program) findObjectIndex(a core.Address) (int, int64) {
 
 // ForEachObject calls fn with each object in the Go heap.
 // If fn returns false, ForEachObject returns immediately.
-func (p *Program) ForEachObject(fn func(x Object) bool) {
+func (p *Process) ForEachObject(fn func(x Object) bool) {
 	for i := 0; i < len(p.heapInfo); i++ {
 		m := p.heapInfo[i].mark
 		for m != 0 {
@@ -205,7 +205,7 @@ func (p *Program) ForEachObject(fn func(x Object) bool) {
 
 // ForEachRoot calls fn with each garbage collection root.
 // If fn returns false, ForEachRoot returns immediately.
-func (p *Program) ForEachRoot(fn func(r *Root) bool) {
+func (p *Process) ForEachRoot(fn func(r *Root) bool) {
 	for _, r := range p.globals {
 		if !fn(r) {
 			return
@@ -223,19 +223,19 @@ func (p *Program) ForEachRoot(fn func(r *Root) bool) {
 }
 
 // Addr returns the starting address of x.
-func (p *Program) Addr(x Object) core.Address {
+func (p *Process) Addr(x Object) core.Address {
 	return core.Address(x)
 }
 
 // Size returns the size of x in bytes.
-func (p *Program) Size(x Object) int64 {
+func (p *Process) Size(x Object) int64 {
 	return p.heapInfo[uint64(core.Address(x).Sub(p.arenaStart))/512].size
 }
 
 // Type returns the type and repeat count for the object x.
 // x contains at least repeat copies of the returned type.
 // FlagTypes must have been passed to Core when p was constructed.
-func (p *Program) Type(x Object) (*Type, int64) {
+func (p *Process) Type(x Object) (*Type, int64) {
 	i, _ := p.findObjectIndex(core.Address(x))
 	return p.types[i].t, p.types[i].r
 }
@@ -248,7 +248,7 @@ func (p *Program) Type(x Object) (*Type, int64) {
 // If fn returns false, ForEachPtr returns immediately.
 // For an edge from an object to its finalizer, the first argument
 // passed to fn will be -1.
-func (p *Program) ForEachPtr(x Object, fn func(int64, Object, int64) bool) {
+func (p *Process) ForEachPtr(x Object, fn func(int64, Object, int64) bool) {
 	size := p.Size(x)
 	for i := int64(0); i < size; i += p.proc.PtrSize() {
 		a := core.Address(x).Add(i)
@@ -266,13 +266,13 @@ func (p *Program) ForEachPtr(x Object, fn func(int64, Object, int64) bool) {
 }
 
 // ForEachRootPtr behaves like ForEachPtr but it starts with a Root instead of an Object.
-func (p *Program) ForEachRootPtr(r *Root, fn func(int64, Object, int64) bool) {
+func (p *Process) ForEachRootPtr(r *Root, fn func(int64, Object, int64) bool) {
 	edges1(p, r, 0, r.Type, fn)
 }
 
 // edges1 calls fn for the edges found in an object of type t living at offset off in the root r.
 // If fn returns false, return immediately with false.
-func edges1(p *Program, r *Root, off int64, t *Type, fn func(int64, Object, int64) bool) bool {
+func edges1(p *Process, r *Root, off int64, t *Type, fn func(int64, Object, int64) bool) bool {
 	switch t.Kind {
 	case KindBool, KindInt, KindUint, KindFloat, KindComplex:
 		// no edges here
