@@ -28,13 +28,6 @@ func Core(coreFile, base string) (*Process, error) {
 		return nil, err
 	}
 
-	// Double-check that we have complete data available for all mappings.
-	for _, m := range p.maps {
-		if m.f == nil {
-			return nil, fmt.Errorf("incomplete mapping %x %x", m.min, m.max)
-		}
-	}
-
 	// Sort then merge mappings, just to clean up a bit.
 	sort.Slice(p.maps, func(i, j int) bool {
 		return p.maps[i].min < p.maps[j].min
@@ -56,6 +49,11 @@ func Core(coreFile, base string) (*Process, error) {
 
 	// Memory map all the mappings.
 	for _, m := range maps {
+		if m.f == nil {
+			// Pretend this is read-as-zero.
+			m.contents = make([]byte, m.max.Sub(m.min))
+			continue
+		}
 		var err error
 		m.contents, err = syscall.Mmap(int(m.f.Fd()), m.off, int(m.max.Sub(m.min)), syscall.PROT_READ, syscall.MAP_SHARED)
 		if err != nil {
@@ -151,9 +149,6 @@ func (p *Process) readLoad(f *os.File, e *elf.File, prog *elf.Prog) error {
 	}
 	if prog.Flags&elf.PF_W != 0 {
 		perm |= Write
-		if prog.Filesz != prog.Memsz {
-			return fmt.Errorf("Data at address %x is not complete. The core has %x bytes, we need %x bytes", min, prog.Filesz, prog.Memsz)
-		}
 	}
 	if prog.Flags&elf.PF_X != 0 {
 		perm |= Exec
@@ -171,6 +166,7 @@ func (p *Process) readLoad(f *os.File, e *elf.File, prog *elf.Prog) error {
 		if prog.Filesz < uint64(m.max.Sub(m.min)) {
 			// We only have partial data for this mapping in the core file.
 			// Trim the mapping and allocate an anonymous mapping for the remainder.
+			// The remainder will be read-as-zero.
 			m2 := &Mapping{min: m.min.Add(int64(prog.Filesz)), max: m.max, perm: m.perm}
 			m.max = m2.min
 			p.maps = append(p.maps, m2)
@@ -247,10 +243,8 @@ func (p *Process) readNTFile(f *os.File, e *elf.File, desc []byte) error {
 
 		backing, err := os.Open(filepath.Join(p.base, name))
 		if err != nil {
-			// Can't find mapped file.
-			// TODO: if we debug on a different machine,
-			// provide a way to map from core's file spec to a real file.
-			return fmt.Errorf("can't open mapped file: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Missing data for addresses [%x %x] because of failure to %s. Assuming all zero.\n", min, max, err)
+			// backing==nil means treat as all zero.
 		}
 
 		// TODO: this is O(n^2). Shouldn't be a big problem in practice.
@@ -294,7 +288,7 @@ func (p *Process) readNTFile(f *os.File, e *elf.File, desc []byte) error {
 					}
 
 				}
-				if !found {
+				if !found && backing != nil {
 					p.exec = append(p.exec, m.f)
 				}
 			}
