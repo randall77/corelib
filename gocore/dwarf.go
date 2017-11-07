@@ -3,11 +3,41 @@ package gocore
 import (
 	"debug/dwarf"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
 	"github.com/randall77/corelib/core"
 )
+
+// Wrappers to recover in case debug/dwarf panics.
+// TODO: fix the bug in the debug/dwarf library instead.
+func wrapType(d *dwarf.Data, off dwarf.Offset) (dt dwarf.Type, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if false {
+				fmt.Fprintf(os.Stderr, "bad offset: %d\n", off)
+			}
+			dt = nil
+			err = r.(error)
+		}
+	}()
+	dt, err = d.Type(off)
+	return
+}
+
+func wrapSize(dt dwarf.Type) (size int64) {
+	defer func() {
+		if r := recover(); r != nil {
+			if false {
+				fmt.Fprintf(os.Stderr, "bad size: %s\n", dt)
+			}
+			size = 0
+		}
+	}()
+	size = dt.Size()
+	return
+}
 
 // read DWARF types from core dump.
 func (p *Process) readDWARFTypes() {
@@ -19,11 +49,11 @@ func (p *Process) readDWARFTypes() {
 	for e, err := r.Next(); e != nil && err == nil; e, err = r.Next() {
 		switch e.Tag {
 		case dwarf.TagArrayType, dwarf.TagPointerType, dwarf.TagStructType, dwarf.TagBaseType, dwarf.TagSubroutineType, dwarf.TagTypedef:
-			dt, err := d.Type(e.Offset)
+			dt, err := wrapType(d, e.Offset)
 			if err != nil {
 				continue
 			}
-			size := dt.Size()
+			size := wrapSize(dt)
 			if size < 0 { // Fix for issue 21097.
 				size = dwarfSize(dt, p.proc.PtrSize())
 			}
@@ -41,6 +71,10 @@ func (p *Process) readDWARFTypes() {
 			t.Kind = KindArray
 			t.Elem = p.dwarfMap[x.Type]
 			t.Count = x.Count
+			if t.Elem == nil {
+				// Array type with a non-Go base type - ignore it.
+				delete(p.dwarfMap, dt)
+			}
 		case *dwarf.PtrType:
 			t.Kind = KindPtr
 			// unsafe.Pointer has a void base type.
@@ -50,6 +84,10 @@ func (p *Process) readDWARFTypes() {
 		case *dwarf.StructType:
 			t.Kind = KindStruct
 			for _, f := range x.Field {
+				if p.dwarfMap[f.Type] == nil {
+					// Some non-Go type as a field - ignore it.
+					continue
+				}
 				t.Fields = append(t.Fields, Field{Name: f.Name, Type: p.dwarfMap[f.Type], Off: f.ByteOffset})
 			}
 		case *dwarf.BoolType:
@@ -66,6 +104,12 @@ func (p *Process) readDWARFTypes() {
 			t.Kind = KindFunc
 		case *dwarf.TypedefType:
 			// handle these types in the loop below
+
+		// C types, might as well handle them.
+		case *dwarf.CharType:
+			t.Kind = KindInt
+		case *dwarf.UcharType:
+			t.Kind = KindUint
 		default:
 			panic(fmt.Sprintf("unknown type %s %T", dt, dt))
 		}
@@ -111,6 +155,11 @@ func (p *Process) readDWARFTypes() {
 
 		t := p.dwarfMap[dt]
 		bt := p.dwarfMap[base]
+		if bt == nil {
+			// Base type is non-Go, ignore it.
+			delete(p.dwarfMap, dt)
+			continue
+		}
 
 		// Copy type info from base. Everything except the name.
 		name := t.name
@@ -200,13 +249,22 @@ func dwarfSize(dt dwarf.Type, ptrSize int64) int64 {
 		return x.Count * dwarfSize(x.Type, ptrSize)
 	case *dwarf.TypedefType:
 		return dwarfSize(x.Type, ptrSize)
+	case *dwarf.UnspecifiedType:
+		return 0 // TODO: what the heck?
+	case *dwarf.StructType:
+		return 0 // TODO
+	case *dwarf.QualType:
+		return 0 // TODO
 	default:
-		panic("unhandled")
+		panic(fmt.Sprintf("unhandled %T", dt))
 	}
 }
 
 // gocoreName generates the name this package uses to refer to a dwarf type.
 func gocoreName(dt dwarf.Type) string {
+	if dt == nil {
+		return "<badtype>"
+	}
 	switch x := dt.(type) {
 	case *dwarf.PtrType:
 		if _, ok := x.Type.(*dwarf.VoidType); ok {
@@ -247,6 +305,9 @@ func gocoreName(dt dwarf.Type) string {
 // Generate the name the runtime uses for a dwarf type. The DWARF generator
 // and the runtime use slightly different names for the same underlying type.
 func runtimeName(dt dwarf.Type) string {
+	if dt == nil {
+		return "<badtype>"
+	}
 	switch x := dt.(type) {
 	case *dwarf.PtrType:
 		if _, ok := x.Type.(*dwarf.VoidType); ok {
@@ -375,6 +436,9 @@ func (p *Process) typeHeap() {
 	// r copies of type t.
 	add := func(a core.Address, t *Type, r int64) {
 		if a == 0 { // nil pointer
+			return
+		}
+		if t == nil { //huh?
 			return
 		}
 		i, off := p.findObjectIndex(a)
@@ -578,6 +642,10 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 					}
 				}
 			}
+			if dt.Kind == KindFunc {
+				// TODO: branch fo KindFunc case?
+				return
+			}
 			if dt.Kind != KindPtr {
 				panic(fmt.Sprintf("direct type isn't a pointer %s", dt.Kind))
 			}
@@ -647,6 +715,8 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		for _, f := range t.Fields {
 			p.typeObject(a.Add(f.Off), f.Type, r, add)
 		}
+	case KindNone:
+		return // TODO: avoid this?
 	default:
 		panic(fmt.Sprintf("unknown type kind %s\n", t.Kind))
 	}
@@ -713,7 +783,13 @@ func (p *Process) readGlobals() {
 		if e.Tag != dwarf.TagVariable {
 			continue
 		}
-		loc := e.AttrField(dwarf.AttrLocation).Val.([]byte)
+		if e.AttrField(dwarf.AttrLocation) == nil {
+			continue
+		}
+		loc, ok := e.AttrField(dwarf.AttrLocation).Val.([]byte)
+		if !ok {
+			continue // Sometimes an int64?
+		}
 		if loc[0] != _DW_OP_addr {
 			continue
 		}
@@ -728,12 +804,18 @@ func (p *Process) readGlobals() {
 			// TODO: keep roots around anyway?
 			continue
 		}
+		if e.AttrField(dwarf.AttrType) == nil {
+			continue
+		}
 		dt, err := d.Type(e.AttrField(dwarf.AttrType).Val.(dwarf.Offset))
 		if err != nil {
 			panic(err)
 		}
 		if _, ok := dt.(*dwarf.UnspecifiedType); ok {
 			continue // Ignore markers like data/edata.
+		}
+		if p.dwarfMap[dt] == nil {
+			continue
 		}
 		p.globals = append(p.globals, &Root{
 			Name:  e.AttrField(dwarf.AttrName).Val.(string),
@@ -756,7 +838,19 @@ func (p *Process) readStackVars() {
 	r := d.Reader()
 	for e, err := r.Next(); e != nil && err == nil; e, err = r.Next() {
 		if e.Tag == dwarf.TagSubprogram {
+			if e.AttrField(dwarf.AttrLowpc) == nil {
+				continue
+			}
+			if _, ok := e.AttrField(dwarf.AttrLowpc).Val.(uint64); !ok {
+				continue
+			}
 			min := core.Address(e.AttrField(dwarf.AttrLowpc).Val.(uint64))
+			if e.AttrField(dwarf.AttrHighpc) == nil {
+				continue
+			}
+			if _, ok := e.AttrField(dwarf.AttrHighpc).Val.(uint64); !ok {
+				continue
+			}
 			max := core.Address(e.AttrField(dwarf.AttrHighpc).Val.(uint64))
 			f := p.funcTab.find(min)
 			if f == nil {
@@ -780,7 +874,10 @@ func (p *Process) readStackVars() {
 		if aloc == nil {
 			continue
 		}
-		loc := aloc.Val.([]byte)
+		loc, ok := aloc.Val.([]byte)
+		if !ok {
+			continue
+		}
 		if len(loc) == 0 || loc[0] != _DW_OP_call_frame_cfa {
 			continue
 		}
@@ -812,6 +909,9 @@ func (p *Process) readStackVars() {
 			panic(err)
 		}
 		name := e.AttrField(dwarf.AttrName).Val.(string)
+		if p.dwarfMap[dt] == nil {
+			continue
+		}
 		vars[curfn] = append(vars[curfn], Var{name: name, off: off, typ: p.dwarfMap[dt]})
 	}
 
