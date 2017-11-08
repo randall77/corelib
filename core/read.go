@@ -48,17 +48,33 @@ func Core(coreFile, base string) (*Process, error) {
 	}
 
 	// Memory map all the mappings.
+	pgsize := int64(syscall.Getpagesize())
 	for _, m := range maps {
+		size := m.max.Sub(m.min)
 		if m.f == nil {
 			// Pretend this is read-as-zero.
-			m.contents = make([]byte, m.max.Sub(m.min))
+			m.contents = make([]byte, size)
 			continue
 		}
-		var err error
-		m.contents, err = syscall.Mmap(int(m.f.Fd()), m.off, int(m.max.Sub(m.min)), syscall.PROT_READ, syscall.MAP_SHARED)
-		if err != nil {
-			return nil, fmt.Errorf("can't memory map %s at %d: %s\n", m.f, m.off, err)
+		// Data in core file might not be aligned. Expand memory range
+		// so we can mmap full pages.
+		minOff := m.off
+		maxOff := m.off + size
+		if minOff%pgsize != 0 {
+			minOff -= minOff % pgsize
 		}
+		if maxOff%pgsize != 0 {
+			maxOff += pgsize - maxOff%pgsize
+		}
+		var err error
+		m.contents, err = syscall.Mmap(int(m.f.Fd()), minOff, int(maxOff-minOff), syscall.PROT_READ, syscall.MAP_SHARED)
+		if err != nil {
+			return nil, fmt.Errorf("can't memory map %s at %x: %s\n", m.f, m.off, err)
+		}
+
+		// Trim any data we mapped but don't need.
+		m.contents = m.contents[m.off-minOff:]
+		m.contents = m.contents[:size]
 	}
 
 	// Build page table for mapping lookup.
