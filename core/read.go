@@ -32,9 +32,9 @@ func Core(coreFile, base string) (*Process, error) {
 	sort.Slice(p.maps, func(i, j int) bool {
 		return p.maps[i].min < p.maps[j].min
 	})
-	maps := p.maps[1:]
+	ms := p.maps[1:]
 	p.maps = p.maps[:1]
-	for _, m := range maps {
+	for _, m := range ms {
 		k := p.maps[len(p.maps)-1]
 		if m.min == k.max &&
 			m.perm == k.perm &&
@@ -49,7 +49,7 @@ func Core(coreFile, base string) (*Process, error) {
 
 	// Memory map all the mappings.
 	pgsize := int64(syscall.Getpagesize())
-	for _, m := range maps {
+	for _, m := range p.maps {
 		size := m.max.Sub(m.min)
 		if m.f == nil {
 			// Pretend this is read-as-zero.
@@ -78,7 +78,7 @@ func Core(coreFile, base string) (*Process, error) {
 	}
 
 	// Build page table for mapping lookup.
-	for _, m := range maps {
+	for _, m := range p.maps {
 		p.addMapping(m)
 	}
 
