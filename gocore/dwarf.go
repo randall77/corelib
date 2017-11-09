@@ -4,6 +4,7 @@ import (
 	"debug/dwarf"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -356,9 +357,13 @@ func runtimeName(dt dwarf.Type) string {
 		return s
 	default:
 		name := dt.String()
-		if i := strings.LastIndex(name, "/"); i >= 0 {
-			name = name[i+1:] // Runtime uses only last name in package path.
+		// The runtime uses just the package name, not the package path.
+		// Get rid of the package paths.
+		r, err := regexp.Compile("\\w+/")
+		if err != nil {
+			panic(err)
 		}
+		name = strings.Join(r.Split(name, -1), "")
 		return name
 	}
 }
