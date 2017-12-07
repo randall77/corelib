@@ -210,6 +210,10 @@ func main() {
 				comment = "(grab bag, includes OS thread stacks, ...)"
 			case "manual spans":
 				comment = "(Go stacks)"
+			case "retained":
+				comment = "(kept for reuse by Go)"
+			case "released":
+				comment = "(given back to the OS)"
 			}
 			fmt.Fprintf(t, "%s\t%d\t%6.2f%%\t %s\n", fmt.Sprintf("%-20s", indent+s.Name), s.Size, float64(s.Size)*100/float64(all), comment)
 			for _, c := range s.Children {

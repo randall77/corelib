@@ -141,6 +141,7 @@ func (p *Process) readSpans() {
 	allspans := mheap.Field("allspans")
 	var allSpanSize int64
 	var freeSpanSize int64
+	var releasedSpanSize int64
 	var manualSpanSize int64
 	var inUseSpanSize int64
 	var allocSize int64
@@ -154,7 +155,9 @@ func (p *Process) readSpans() {
 		min := core.Address(s.Field("startAddr").Uintptr())
 		elemSize := int64(s.Field("elemsize").Uintptr())
 		nPages := int64(s.Field("npages").Uintptr())
+		nReleased := int64(s.Field("npreleased").Uintptr())
 		spanSize := nPages * pageSize
+		nReleasedSize := nReleased * pageSize
 		max := min.Add(spanSize)
 		allSpanSize += spanSize
 		switch s.Field("state").Cast("uint8").Uint8() {
@@ -207,6 +210,7 @@ func (p *Process) readSpans() {
 			}
 		case spanFree:
 			freeSpanSize += spanSize
+			releasedSpanSize += nReleasedSize
 		case spanDead:
 			// These are just deallocated span descriptors. They use no heap.
 		case spanManual:
@@ -234,7 +238,10 @@ func (p *Process) readSpans() {
 				&Stats{"alloc", manualAllocSize, nil},
 				&Stats{"free", manualFreeSize, nil},
 			}},
-			&Stats{"free spans", freeSpanSize, nil},
+			&Stats{"free spans", freeSpanSize, []*Stats{
+				&Stats{"retained", freeSpanSize - releasedSpanSize, nil},
+				&Stats{"released", releasedSpanSize, nil},
+			}},
 		}},
 		&Stats{"ptr bitmap", bitmap, nil},
 		&Stats{"span table", spanTable, nil},
