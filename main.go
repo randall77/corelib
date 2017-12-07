@@ -27,6 +27,7 @@ The commands are:
   goroutines: list goroutines
    histogram: print histogram of heap memory use by Go type
    breakdown: print memory use by class
+   freespace: print free regions of heap by size
      objects: print a list of all live objects
     objgraph: dump object graph to a .dot file
    reachable: find path from root to an object
@@ -75,6 +76,7 @@ func main() {
 	case "histogram":
 		flags = gocore.FlagTypes
 	case "breakdown":
+	case "freespace":
 	case "objgraph":
 		flags = gocore.FlagTypes
 	case "objects":
@@ -221,6 +223,31 @@ func main() {
 			}
 		}
 		printStat(c.Stats(), "")
+		t.Flush()
+
+	case "freespace":
+		// hist is a map from size to # of slots of that size
+		hist := map[int64]int64{}
+		c.ForEachFreeRegion(func(a core.Address, size int64) bool {
+			hist[size]++
+			return true
+		})
+		type entry struct {
+			size  int64
+			count int64
+		}
+		entries := make([]entry, 0, len(hist))
+		for size, count := range hist {
+			entries = append(entries, entry{size: size, count: count})
+		}
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i].size > entries[j].size
+		})
+		t := tabwriter.NewWriter(os.Stdout, 0, 0, 1, ' ', tabwriter.AlignRight)
+		fmt.Fprintf(t, "size\tcount\ttotal\t\n")
+		for _, e := range entries {
+			fmt.Fprintf(t, "%d\t%d\t%d\t\n", e.size, e.count, e.size*e.count)
+		}
 		t.Flush()
 
 	case "objgraph":

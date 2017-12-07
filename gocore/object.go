@@ -318,3 +318,53 @@ func edges1(p *Process, r *Root, off int64, t *Type, fn func(int64, Object, int6
 	}
 	return true
 }
+
+// ForEachFreeRegion calls fn with each free region in the Go heap.
+// It calls fn with:
+//   the address of the start of the free region
+//   the size of the free region
+// If fn returns false, ForEachFreeRegion returns immediately.
+// A free region is one which could satisfy an allocation of the reported size or less.
+// Free regions do not include garbage objects (those which aren't reachable, but
+// haven't been noticed as unreachable yet by the runtime).
+func (p *Process) ForEachFreeRegion(fn func(core.Address, int64) bool) {
+	mheap := p.rtGlobals["mheap_"]
+	allspans := mheap.Field("allspans")
+	n := allspans.SliceLen()
+	pageSize := p.rtConstants["_PageSize"]
+	spanInUse := uint8(p.rtConstants["_MSpanInUse"])
+	spanFree := uint8(p.rtConstants["_MSpanFree"])
+
+	for i := int64(0); i < n; i++ {
+		s := allspans.SliceIndex(i).Deref()
+		min := core.Address(s.Field("startAddr").Uintptr())
+		nPages := int64(s.Field("npages").Uintptr())
+		size := nPages * pageSize
+		elemSize := int64(s.Field("elemsize").Uintptr())
+		switch s.Field("state").Cast("uint8").Uint8() {
+		case spanFree:
+			if !fn(min, size) {
+				return
+			}
+		case spanInUse:
+			n := int64(s.Field("nelems").Uintptr())
+			alloc := make([]bool, n)
+			for i := int64(0); i < n; i++ {
+				alloc[i] = p.proc.ReadUint8(min.Add(i/8))>>uint(i%8)&1 != 0
+			}
+			k := int64(s.Field("freeindex").Uintptr())
+			for i := int64(0); i < k; i++ {
+				alloc[i] = true
+			}
+			for i := int64(0); i < n; i++ {
+				if alloc[i] {
+					continue
+				}
+				if !fn(min.Add(i*elemSize), elemSize) {
+					return
+				}
+			}
+
+		}
+	}
+}
