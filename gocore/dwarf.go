@@ -795,7 +795,7 @@ func (p *Process) readGlobals() {
 		if !ok {
 			continue // Sometimes an int64?
 		}
-		if loc[0] != _DW_OP_addr {
+		if len(loc) == 0 || loc[0] != _DW_OP_addr {
 			continue
 		}
 		var a core.Address
@@ -907,6 +907,9 @@ func (p *Process) readStackVars() {
 			off = off << (64 - s) >> (64 - s)
 		}
 		if len(loc) != 0 {
+			continue
+		}
+		if e.AttrField(dwarf.AttrType) == nil {
 			continue
 		}
 		dt, err := d.Type(e.AttrField(dwarf.AttrType).Val.(dwarf.Offset))
